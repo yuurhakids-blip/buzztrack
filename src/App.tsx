@@ -18,7 +18,8 @@ import {
   CheckCircle,
   Clock,
   Fingerprint,
-  Cpu
+  Cpu,
+  RefreshCw
 } from 'lucide-react';
 import { Campaign, SuspiciousAccount, Platform, AnalysisResponse, UserReport } from './types';
 import NetworkGraph from './components/NetworkGraph';
@@ -64,6 +65,70 @@ export default function App() {
 
   // General Notification Alert
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Keyword OSINT Search State
+  const [searchKeywordInput, setSearchKeywordInput] = useState('');
+  const [isSearchingKeyword, setIsSearchingKeyword] = useState(false);
+  const [currentKeyword, setCurrentKeyword] = useState('');
+  const [reloadTrigger, setReloadTrigger] = useState(0);
+
+  const handleKeywordSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchKeywordInput.trim()) {
+      showNotification('error', 'Silakan masukkan kata kunci penyelidikan terlebih dahulu.');
+      return;
+    }
+
+    setIsSearchingKeyword(true);
+    try {
+      const response = await fetch('/api/social/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ keyword: searchKeywordInput })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to run keyword scan');
+      }
+
+      setCurrentKeyword(searchKeywordInput);
+      setReloadTrigger(prev => prev + 1);
+      
+      // Pull newly generated data
+      await fetchData();
+      
+      showNotification('success', `Berhasil mendeteksi jaringan buzzer untuk kata kunci: "${searchKeywordInput}"`);
+    } catch (err) {
+      console.error(err);
+      showNotification('error', 'Gagal memindai kata kunci. Silakan coba lagi.');
+    } finally {
+      setIsSearchingKeyword(false);
+    }
+  };
+
+  const handleClearKeywordSearch = async () => {
+    setSearchKeywordInput('');
+    setCurrentKeyword('');
+    setIsSearchingKeyword(true);
+    try {
+      await fetch('/api/social/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ keyword: "Reset_Siber_Clean_Slate" })
+      });
+      setReloadTrigger(prev => prev + 1);
+      await fetchData();
+      showNotification('success', 'Berhasil mereset penyelidikan siber ke kondisi awal.');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSearchingKeyword(false);
+    }
+  };
 
   // Load backend data on mount
   useEffect(() => {
@@ -454,6 +519,59 @@ export default function App() {
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Keyword Discovery and OSINT scanning */}
+          <div className="border-t border-[#2A2A2E] pt-5">
+            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#66666E]/90 mb-3 flex items-center gap-1.5 font-bold">
+              <Cpu className="w-3.5 h-3.5 text-rose-400" /> OSINT Keyword Discovery
+            </h3>
+            <form onSubmit={handleKeywordSearch} className="space-y-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-3 w-4 h-4 text-[#D4AF37]" />
+                <input
+                  type="text"
+                  value={searchKeywordInput}
+                  onChange={(e) => setSearchKeywordInput(e.target.value)}
+                  placeholder="Masukkan kata kunci (e.g. Pemilu)..."
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg py-2.5 pl-9 pr-4 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-rose-500/50"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={isSearchingKeyword}
+                  className="flex-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-medium py-2 px-3 rounded-lg text-xs font-mono transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isSearchingKeyword ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                  ) : (
+                    <Radio className="w-3.5 h-3.5 text-rose-400" />
+                  )}
+                  {isSearchingKeyword ? 'Memindai...' : 'Mulai Pindai'}
+                </button>
+                {currentKeyword && (
+                  <button
+                    type="button"
+                    onClick={handleClearKeywordSearch}
+                    disabled={isSearchingKeyword}
+                    className="bg-slate-950 hover:bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800 p-2 rounded-lg text-xs font-mono cursor-pointer transition"
+                    title="Reset data ke kondisi awal"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </form>
+            {currentKeyword && (
+              <div className="mt-3 p-3 bg-rose-950/20 rounded-lg border border-rose-500/10 text-left">
+                <p className="text-[10px] uppercase font-mono text-rose-400 font-bold tracking-wide">AKTIF MEMANTAU</p>
+                <p className="text-xs font-bold font-mono text-slate-200 mt-1 truncate">"{currentKeyword}"</p>
+                <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                  Sistem telah mematangkan pemodelan intelligence buatan dari arus data platform X, TikTok & YouTube.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="mt-auto hidden xl:block pt-4">
@@ -928,7 +1046,7 @@ export default function App() {
               </div>
 
               {/* Direct insertion of interactive Network Canvas */}
-              <NetworkGraph onSelectNode={handleNodeSelect} />
+              <NetworkGraph onSelectNode={handleNodeSelect} reloadTrigger={reloadTrigger} />
 
               {/* Auxiliary details explaining the map */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-[#0F0F12] border border-[#2A2A2E] p-5 rounded-2xl relative" id="graph-legends-container">
@@ -957,7 +1075,7 @@ export default function App() {
 
           {/* TAB 3.5: Social Accounts & Analytics Dashboard */}
           {activeTab === 'analytics' && (
-            <SocialAnalyticsDashboard showNotification={showNotification} />
+            <SocialAnalyticsDashboard showNotification={showNotification} reloadTrigger={reloadTrigger} />
           )}
 
           {/* TAB 4: Gemini-powered Analyzer Playground */}

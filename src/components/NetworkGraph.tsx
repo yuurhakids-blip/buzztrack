@@ -1,16 +1,50 @@
-import React, { useState } from 'react';
-import { INITIAL_NETWORK_NODES, INITIAL_NETWORK_LINKS } from '../data';
-import { NetworkNode } from '../types';
+import React, { useState, useEffect } from 'react';
+import { NetworkNode, NetworkLink } from '../types';
 import { Shield, AlertTriangle, Radio, Hash, UserCheck, HelpCircle } from 'lucide-react';
 
 interface NetworkGraphProps {
   onSelectNode?: (nodeId: string, label: string, botScore?: number) => void;
+  reloadTrigger?: number;
 }
 
-export default function NetworkGraph({ onSelectNode }: NetworkGraphProps) {
-  const [selectedNode, setSelectedNode] = useState<NetworkNode | null>(INITIAL_NETWORK_NODES[0]);
+export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGraphProps) {
+  const [nodes, setNodes] = useState<NetworkNode[]>([]);
+  const [links, setLinks] = useState<NetworkLink[]>([]);
+  const [selectedNode, setSelectedNode] = useState<NetworkNode | null>(null);
   const [hoveredNode, setHoveredNode] = useState<NetworkNode | null>(null);
   const [platformFilter, setPlatformFilter] = useState<string>('All');
+
+  // Load physical graph structures from memory API
+  useEffect(() => {
+    fetch('/api/network')
+      .then(res => res.json())
+      .then(data => {
+        if (data.nodes) {
+          setNodes(data.nodes);
+          setLinks(data.links || []);
+          
+          // Try to select central campaign node initially
+          const mainHub = data.nodes.find((n: NetworkNode) => n.id === 'narrative-main');
+          if (mainHub) {
+            setSelectedNode(mainHub);
+          } else if (data.nodes.length > 0) {
+            setSelectedNode(data.nodes[0]);
+          } else {
+            setSelectedNode(null);
+          }
+        } else {
+          setNodes([]);
+          setLinks([]);
+          setSelectedNode(null);
+        }
+      })
+      .catch(err => {
+        console.error("Error pulling central nodes:", err);
+        setNodes([]);
+        setLinks([]);
+        setSelectedNode(null);
+      });
+  }, [reloadTrigger]);
 
   // SVG Dimension Constants
   const width = 600;
@@ -33,14 +67,14 @@ export default function NetworkGraph({ onSelectNode }: NetworkGraphProps) {
     'bot-7': { x: 230, y: 40 }
   };
 
-  const nodes = INITIAL_NETWORK_NODES.filter(node => {
+  const filteredNodes = nodes.filter(node => {
     if (platformFilter === 'All') return true;
     if (!node.platform) return true; // Keep campaign/hashtag central nodes
     return node.platform === platformFilter;
   });
 
-  const nodeIds = new Set(nodes.map(n => n.id));
-  const links = INITIAL_NETWORK_LINKS.filter(
+  const nodeIds = new Set(filteredNodes.map(n => n.id));
+  const filteredLinks = links.filter(
     link => nodeIds.has(link.source) && nodeIds.has(link.target)
   );
 
@@ -127,7 +161,7 @@ export default function NetworkGraph({ onSelectNode }: NetworkGraphProps) {
             <circle cx="300" cy="200" r="140" fill="url(#hubbg)" className="pointer-events-none" />
 
             {/* Connection Links */}
-            {links.map((link, idx) => {
+            {filteredLinks.map((link, idx) => {
               const srcPos = positions[link.source];
               const tgtPos = positions[link.target];
               if (!srcPos || !tgtPos) return null;
@@ -167,13 +201,13 @@ export default function NetworkGraph({ onSelectNode }: NetworkGraphProps) {
             })}
 
             {/* Drawing Nodes */}
-            {nodes.map((node) => {
+            {filteredNodes.map((node) => {
               const pos = positions[node.id];
               if (!pos) return null;
 
               const isSelected = selectedNode?.id === node.id;
               const isHovered = hoveredNode?.id === node.id;
-              const isRelated = hoveredNode && INITIAL_NETWORK_LINKS.some(
+              const isRelated = hoveredNode && links.some(
                 l => (l.source === node.id && l.target === hoveredNode.id) || 
                      (l.target === node.id && l.source === hoveredNode.id)
               );

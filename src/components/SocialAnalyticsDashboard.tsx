@@ -32,9 +32,10 @@ import {
 
 interface SocialAnalyticsDashboardProps {
   showNotification: (type: 'success' | 'error', text: string) => void;
+  reloadTrigger?: number;
 }
 
-export default function SocialAnalyticsDashboard({ showNotification }: SocialAnalyticsDashboardProps) {
+export default function SocialAnalyticsDashboard({ showNotification, reloadTrigger }: SocialAnalyticsDashboardProps) {
   // Accounts and Posts Data State
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [posts, setPosts] = useState<SocialPost[]>([]);
@@ -50,7 +51,7 @@ export default function SocialAnalyticsDashboard({ showNotification }: SocialAna
   // Load all analytics dataset elements on mount
   useEffect(() => {
     fetchAnalyticsData();
-  }, [selectedPlatform]);
+  }, [selectedPlatform, reloadTrigger]);
 
   // Handle callback receiver for OAuth popups
   useEffect(() => {
