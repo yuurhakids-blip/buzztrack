@@ -67,7 +67,7 @@ async function runPythonScraper(platform: string, keyword: string, limit = 20): 
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
 
   app.use(express.json());
 
