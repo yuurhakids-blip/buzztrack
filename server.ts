@@ -205,7 +205,7 @@ async function startServer() {
       return res.status(400).json({ error: "Invalid platform requested." });
     }
 
-    const appUrl = (process.env.APP_URL || "https://example.com").replace(/\/$/, "");
+    const appUrl = (process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "https://example.com").replace(/\/$/, "");
     const redirectUri = `${appUrl}/auth/callback`;
     
     let clientId = "";
