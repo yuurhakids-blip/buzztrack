@@ -47,6 +47,11 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
   const [selectedMetric, setSelectedMetric] = useState<'likes' | 'comments' | 'shares' | 'reach'>('likes');
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
+  const [manualUsernames, setManualUsernames] = useState<Record<string, string>>({
+    X: '',
+    YouTube: '',
+    TikTok: ''
+  });
 
   // Load all analytics dataset elements on mount
   useEffect(() => {
@@ -379,25 +384,64 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
             return (
               <div 
                 key={plat} 
-                className="bg-[#0F0F12]/40 border-2 border-dashed border-slate-800 rounded-xl p-5 flex flex-col justify-center items-center text-center hover:border-amber-500/40 transition"
+                className="bg-[#0F0F12]/40 border-2 border-dashed border-slate-800 rounded-xl p-5 flex flex-col justify-between items-center text-center hover:border-amber-500/40 transition"
                 id={`add-soc-${plat.toLowerCase()}`}
               >
-                <div className="w-10 h-10 rounded-full bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-500 mb-3 text-sm">
-                  {plat === 'X' ? <span className="font-mono font-bold">X</span> :
-                   plat === 'YouTube' ? <Youtube className="w-4 h-4 stroke-1.5" /> : 
-                   <Video className="w-4 h-4 stroke-1.5" />}
+                <div className="flex flex-col items-center w-full">
+                  <div className="w-10 h-10 rounded-full bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-500 mb-2.5 text-sm">
+                    {plat === 'X' ? <span className="font-mono font-bold">X</span> :
+                     plat === 'YouTube' ? <Youtube className="w-4 h-4 stroke-1.5" /> : 
+                     <Video className="w-4 h-4 stroke-1.5" />}
+                  </div>
+                  <h4 className="text-xs text-slate-300 font-bold mb-1">Hubungkan {plat} API</h4>
+                  <p className="text-[10px] text-slate-500 max-w-xs mb-3 leading-normal">Otentikasikan profil {plat} Anda untuk menarik jangkauan post digital.</p>
+                  
+                  <button
+                    type="button"
+                    onClick={() => handleConnectProfile(plat as any)}
+                    className="w-full py-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-[#D4AF37] hover:border-[#D4AF37] transition font-mono text-[10.5px] font-bold rounded-lg flex items-center justify-center gap-1.5"
+                    id={`btn-connect-${plat.toLowerCase()}`}
+                  >
+                    <Plus className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    LINK PROFILE
+                  </button>
                 </div>
-                <h4 className="text-xs text-slate-300 font-bold mb-1">Hubungkan {plat} API</h4>
-                <p className="text-[10px] text-slate-500 max-w-xs mb-4 leading-normal">Otentikasikan profil {plat} Anda untuk menarik jangkauan post digital.</p>
-                
-                <button
-                  onClick={() => handleConnectProfile(plat as any)}
-                  className="px-4 py-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-[#D4AF37] hover:border-[#D4AF37] transition font-mono text-[10.5px] font-bold rounded-lg flex items-center gap-1.5"
-                  id={`btn-connect-${plat.toLowerCase()}`}
-                >
-                  <Plus className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  LINK PROFILE
-                </button>
+
+                {/* Elegant Separator and manual configuration fallback */}
+                <div className="w-full border-t border-slate-800/60 my-3.5 pt-3.5">
+                  <div className="flex items-center justify-center gap-2 mb-2 text-[9px] font-mono font-bold text-slate-600">
+                    <span className="h-[1px] bg-slate-800 flex-1"></span>
+                    <span>ATAU MASUKKAN MANUAL</span>
+                    <span className="h-[1px] bg-slate-800 flex-1"></span>
+                  </div>
+
+                  <div className="flex gap-1 w-full">
+                    <input
+                      type="text"
+                      value={manualUsernames[plat] || ''}
+                      onChange={(e) => setManualUsernames({
+                        ...manualUsernames,
+                        [plat]: e.target.value
+                      })}
+                      placeholder="e.g. username_saya"
+                      className="flex-1 text-[10px] bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-slate-300 placeholder-slate-700 outline-none focus:border-amber-500/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const userVal = manualUsernames[plat];
+                        if (!userVal || !userVal.trim()) {
+                          showNotification('error', 'Silakan masukkan nama pengguna (username) terlebih dahulu.');
+                          return;
+                        }
+                        handleRegisterConnectedAccount(plat, userVal.trim());
+                      }}
+                      className="px-2.5 bg-slate-900 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 text-slate-200 transition font-mono text-[9px] font-bold rounded cursor-pointer"
+                    >
+                      Konek
+                    </button>
+                  </div>
+                </div>
               </div>
             );
           })}
