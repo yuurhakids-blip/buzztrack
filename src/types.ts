@@ -2,7 +2,7 @@
  * Types for the Buzzer Tracker application
  */
 
-export type Platform = 'X' | 'TikTok' | 'YouTube';
+export type Platform = 'X' | 'TikTok' | 'YouTube' | 'All';
 
 export interface Campaign {
   id: string;

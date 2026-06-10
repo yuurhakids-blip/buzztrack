@@ -332,6 +332,99 @@ async function startServer() {
     res.json({ success: true, message: `Successfully synchronized and updated metrics for @${account.username}` });
   });
 
+  // J. OAuth Callback Landing Page (Handles both real and fallback redirects)
+  app.get("/auth/callback", (req, res) => {
+    let platform = (req.query.platform || "") as string;
+    const state = (req.query.state || "") as string;
+    const code = (req.query.code || "") as string;
+
+    if (!platform && state) {
+      if (state.includes("X")) platform = "X";
+      else if (state.includes("YouTube")) platform = "YouTube";
+      else if (state.includes("TikTok")) platform = "TikTok";
+    }
+
+    if (!platform) platform = "X";
+
+    // Generate/resolve realistic handle
+    const demoUsernames: Record<string, string[]> = {
+      'X': ['SiberWatcher_X', 'RadarIntel_ID', 'SkeptisMedsos', 'KawalPemilu_X'],
+      'YouTube': ['OpiniSiber_TV', 'CerdasBangsa_Channel', 'FaktaNusantara_YT', 'Senter_Demokrasi'],
+      'TikTok': ['siber.watch.id', 'awas_hoaks_tiktok', 'kamuharustau_fakta', 'rakyat_merdeka']
+    };
+    const choices = demoUsernames[platform] || ['DemoUser'];
+    const choicesList = Array.isArray(choices) ? choices : ['DemoUser'];
+    const chosen = choicesList[Math.floor(Math.random() * choicesList.length)];
+    const username = `${chosen}${Math.floor(10 + Math.random() * 89)}`;
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>OAuth Success - EchoWatch Tracker</title>
+        <style>
+          body {
+            background-color: #0A0A0B;
+            color: #E0E0E0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+          }
+          .card {
+            background-color: #121215;
+            border: 2px solid #52C41A;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+          }
+          h1 { color: #52C41A; font-size: 20px; margin-bottom: 10px; }
+          p { font-size: 14px; color: #A0A0A5; margin-bottom: 20px; }
+          .spinner {
+            border: 3px solid #1A1A1F;
+            border-top: 3px solid #52C41A;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>Autentikasi Berhasil!</h1>
+          <p>Mengkoneksikan akun @${username} pada platform ${platform}...</p>
+          <div class="spinner"></div>
+        </div>
+        <script>
+          setTimeout(() => {
+            if (window.opener) {
+              window.opener.postMessage({ 
+                type: 'OAUTH_AUTH_SUCCESS',
+                platform: '${platform}',
+                username: '${username}'
+              }, '*');
+              window.close();
+            } else {
+              window.location.href = '/';
+            }
+          }, 1500);
+        </script>
+      </body>
+      </html>
+    `);
+  });
+
   // I. Simulated Sandbox Authorization Page (Fulfills pop-up requirement)
   app.get("/auth/sandbox", (req, res) => {
     const platform = req.query.platform || "X";

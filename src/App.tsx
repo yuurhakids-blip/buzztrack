@@ -1131,6 +1131,7 @@ export default function App() {
                         className="w-full text-xs font-mono bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-300 focus:outline-none focus:border-[#D4AF37]"
                         id="select-scan-platform"
                       >
+                        <option value="All">Semua Platform (All)</option>
                         <option value="X">X (Twitter)</option>
                         <option value="TikTok">TikTok</option>
                         <option value="YouTube">YouTube</option>
