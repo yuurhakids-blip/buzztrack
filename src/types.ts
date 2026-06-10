@@ -38,10 +38,12 @@ export interface SuspiciousAccount {
 export interface NetworkNode {
   id: string;
   label: string;
-  group: 'campaign' | 'buzzer_master' | 'buzzer_node' | 'hashtag';
+  group: 'campaign' | 'buzzer_master' | 'buzzer_node' | 'hashtag' | 'platform_hub';
   platform?: Platform;
   size: number;
   botScore?: number;
+  postText?: string;
+  postUrl?: string;
 }
 
 export interface NetworkLink {

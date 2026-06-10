@@ -1,11 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  X, 
-  Youtube, 
-  Video, 
-  RefreshCw, 
-  Trash2, 
-  Plus, 
   TrendingUp, 
   Users, 
   Activity, 
@@ -16,10 +10,10 @@ import {
   UserCheck, 
   MapPin, 
   Layers,
-  Sparkles,
-  Link as LinkIcon
+  ExternalLink,
 } from 'lucide-react';
 import { SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from '../types';
+import { api } from '../api';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -33,9 +27,10 @@ import {
 interface SocialAnalyticsDashboardProps {
   showNotification: (type: 'success' | 'error', text: string) => void;
   reloadTrigger?: number;
+  dateRange?: { start: string; end: string };
 }
 
-export default function SocialAnalyticsDashboard({ showNotification, reloadTrigger }: SocialAnalyticsDashboardProps) {
+export default function SocialAnalyticsDashboard({ showNotification, reloadTrigger, dateRange }: SocialAnalyticsDashboardProps) {
   // Accounts and Posts Data State
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [posts, setPosts] = useState<SocialPost[]>([]);
@@ -45,160 +40,38 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
   // Interface selection states
   const [selectedPlatform, setSelectedPlatform] = useState<'All' | 'X' | 'YouTube' | 'TikTok'>('All');
   const [selectedMetric, setSelectedMetric] = useState<'likes' | 'comments' | 'shares' | 'reach'>('likes');
-  const [syncingId, setSyncingId] = useState<string | null>(null);
-  const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
+  const [showAllTopPosts, setShowAllTopPosts] = useState(false);
 
-  // Load all analytics dataset elements on mount
+  const [scraperStatus, setScraperStatus] = useState<{ twitter: boolean; youtube: boolean; tiktok: boolean } | null>(null);
+
   useEffect(() => {
     fetchAnalyticsData();
+    fetchScraperStatus();
   }, [selectedPlatform, reloadTrigger]);
 
-  // Handle callback receiver for OAuth popups
-  useEffect(() => {
-    const handleMessage = async (event: MessageEvent) => {
-      // Validate origin is from preview or localhost
-      const origin = event.origin;
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) {
-         return;
-      }
-
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        const { platform, username } = event.data;
-        showNotification('success', `OAuth Connection Success! Authenticated as @${username} on ${platform}`);
-        await handleRegisterConnectedAccount(platform, username);
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  const fetchScraperStatus = async () => {
+    try {
+      const status = await api.scrapers.status();
+      setScraperStatus(status);
+    } catch { /* ignore */ }
+  };
 
   const fetchAnalyticsData = async () => {
     try {
-      const [accountsRes, postsRes, demoRes, timelineRes] = await Promise.all([
-        fetch('/api/social/accounts'),
-        fetch('/api/social/posts'),
-        fetch(`/api/social/demographics?platform=${selectedPlatform}`),
-        fetch('/api/social/engagement')
+      const [accountsData, postsData, demoData, timelineData] = await Promise.all([
+        api.social.accounts.list(),
+        api.social.posts.list(),
+        api.social.demographics.get(selectedPlatform),
+        api.social.engagement.get()
       ]);
 
-      if (accountsRes.ok && postsRes.ok && demoRes.ok && timelineRes.ok) {
-        const accountsData = await accountsRes.json();
-        const postsData = await postsRes.json();
-        const demoData = await demoRes.json();
-        const timelineData = await timelineRes.json();
-
-        setAccounts(accountsData);
-        setPosts(postsData);
-        setDemographics(demoData);
-        setTimeline(timelineData);
-      }
+      setAccounts(accountsData);
+      setPosts(postsData);
+      setDemographics(demoData);
+      setTimeline(timelineData);
     } catch (err) {
       console.error("Error fetching social analytics dataset:", err);
       showNotification('error', 'Failed to pull social channels telemetry.');
-    }
-  };
-
-  // Launch popup for social authentication
-  const handleConnectProfile = async (platform: 'X' | 'YouTube' | 'TikTok') => {
-    setConnectingPlatform(platform);
-    try {
-      const response = await fetch(`/api/social/auth/url?platform=${platform}`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch auth routing URL.');
-      }
-      const { url, real } = await response.json();
-
-      showNotification('success', `Opening ${platform} authorization popup...`);
-
-      // Open OAuth provider directly or Sandbox simulator
-      const authWindow = window.open(
-        url,
-        'oauth_popup',
-        'width=500,height=600,status=no,resizable=yes,scrollbars=yes'
-      );
-
-      if (!authWindow) {
-        showNotification('error', 'Popup blocked. Please permit pop-ups on this tab to connect accounts.');
-      }
-    } catch (err) {
-      console.error(err);
-      showNotification('error', 'Could not open authentication gateway.');
-    } finally {
-      setConnectingPlatform(null);
-    }
-  };
-
-  // Connects social profile on server and synchronizes interface
-  const handleRegisterConnectedAccount = async (platform: string, username: string) => {
-    try {
-      const response = await fetch('/api/social/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform, username })
-      });
-
-      if (response.ok) {
-        showNotification('success', `Synchronized profile feed: @${username}`);
-        await fetchAnalyticsData();
-      } else {
-        const errObj = await response.json().catch(() => ({}));
-        showNotification('error', errObj.error || 'Error binding account verification.');
-      }
-    } catch (err: any) {
-      console.error(err);
-      showNotification('error', err.message || 'Failed to connect account.');
-    }
-  };
-
-  // Sync metrics for individual account
-  const handleSyncAccount = async (id: string, username: string) => {
-    setSyncingId(id);
-    try {
-      const response = await fetch('/api/social/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        showNotification('success', data.message);
-        await fetchAnalyticsData();
-      } else {
-        const errObj = await response.json().catch(() => ({}));
-        showNotification('error', errObj.error || 'Failed to sync API channels.');
-      }
-    } catch (err: any) {
-      console.error(err);
-      showNotification('error', err.message || 'Sync request failed.');
-    } finally {
-      setSyncingId(null);
-    }
-  };
-
-  // Disconnect social profile
-  const handleDisconnectAccount = async (id: string, username: string) => {
-    if (!confirm(`Apakah Anda yakin ingin mematikan koneksi API untuk @${username}? Postingan dan metrik terkait akan dihapus.`)) {
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/social/disconnect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-
-      if (response.ok) {
-        showNotification('success', `Koneksi @${username} berhasil diputuskan.`);
-        await fetchAnalyticsData();
-      } else {
-        showNotification('error', 'Gagal memutuskan sambungan.');
-      }
-    } catch (err) {
-      console.error(err);
-      showNotification('error', 'Failed response from disconnect API.');
     }
   };
 
@@ -222,10 +95,20 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
     ? parseFloat((filteredPosts.reduce((sum, p) => sum + p.engagementRate, 0) / filteredPosts.length).toFixed(2))
     : 0.00;
 
-  // Identify Top 5 posts by engagement rate or total actions
-  const topPosts = [...filteredPosts]
-    .sort((a, b) => (b.likes + b.comments + b.shares) - (a.likes + a.comments + a.shares))
-    .slice(0, 5);
+  const matchesDateRange = (date?: string) => {
+    if (!dateRange?.start && !dateRange?.end) return true;
+    const d = date || '';
+    if (dateRange.start && d < dateRange.start) return false;
+    if (dateRange.end && d > dateRange.end) return false;
+    return true;
+  };
+
+  // Identify top posts by total engagement
+  const sortedPosts = [...filteredPosts]
+    .filter(p => matchesDateRange(p.publishedAt))
+    .sort((a, b) => (b.likes + b.comments + b.shares) - (a.likes + a.comments + a.shares));
+  const topPosts = sortedPosts.slice(0, showAllTopPosts ? 15 : 5);
+  const hasMorePosts = sortedPosts.length > 5;
 
   // Custom styling elements depending on selected platform colors
   const getPlatformColors = (plat: string) => {
@@ -298,108 +181,64 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
           <div>
             <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
               <span className="w-1.5 h-3 bg-[#D4AF37] rounded-sm"></span>
-              Profil Saluran API Terkoneksi ({accounts.length})
+              Status Scraper Platform
             </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">Permit otentikasi API independen untuk memantau feed metrik secara berkala.</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Status koneksi scraper real-time untuk setiap platform media sosial.</p>
           </div>
           
-          {/* Quick instructions indicator */}
-          <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono text-slate-400 bg-amber-500/5 border border-amber-500/10 px-2.5 py-1 rounded">
-            <Sparkles className="w-3.5 h-3.5 text-[#D4AF37]" />
-            SDK Otomatis & Sandbox Simulator Aktif
+          {/* Scraper status indicators */}
+          <div className="flex items-center gap-2">
+            {scraperStatus && (
+              <>
+                {[
+                  { key: 'twitter' as const, label: 'X' },
+                  { key: 'youtube' as const, label: 'YT' },
+                  { key: 'tiktok' as const, label: 'TK' },
+                ].map(s => (
+                  <div
+                    key={s.key}
+                    className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded border ${
+                      scraperStatus[s.key]
+                        ? 'text-emerald-400 bg-emerald-500/5 border-emerald-500/20'
+                        : 'text-slate-500 bg-slate-800/20 border-slate-800'
+                    }`}
+                    title={scraperStatus[s.key] ? `${s.label} scraper terhubung` : `${s.label} scraper tidak terkonfigurasi`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${scraperStatus[s.key] ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+                    {s.label}
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {/* Loop accounts */}
-          {accounts.map((acc) => {
-            const colors = getPlatformColors(acc.platform);
+          {[
+            { key: 'twitter' as const, label: 'X', icon: 'X' },
+            { key: 'youtube' as const, label: 'YouTube', icon: 'YT' },
+            { key: 'tiktok' as const, label: 'TikTok', icon: 'TK' },
+          ].map((p) => {
+            const connected = scraperStatus?.[p.key] ?? false;
             return (
-              <div 
-                key={acc.id} 
-                className={`bg-[#0F0F12] border ${colors.border} rounded-xl p-4 flex flex-col justify-between transition hover:shadow-lg`} 
-                id={`soc-card-${acc.id}`}
+              <div
+                key={p.key}
+                className={`bg-[#0F0F12] border rounded-xl p-6 flex flex-col items-center text-center transition ${
+                  connected ? 'border-emerald-500/30' : 'border-slate-800'
+                }`}
               >
-                <div>
-                  <div className="flex justify-between items-center mb-3">
-                    <span className={`text-[9px] font-mono font-bold tracking-widest px-2.5 py-0.5 rounded uppercase ${colors.badgeBg} ${colors.text}`}>
-                      {acc.platform}
-                    </span>
-                    <span className="text-[10px] font-mono text-slate-500 font-semibold">Terkoneksi: {acc.connectedAt}</span>
-                  </div>
-
-                  <div className="flex items-center space-x-3 mb-4">
-                    <div className="w-10 h-10 rounded-full bg-[#1A1A1F] flex items-center justify-center border border-slate-800 text-sm font-mono font-bold text-[#D4AF37]">
-                      {acc.username.substring(0, 2).toUpperCase()}
-                    </div>
-                    <div className="overflow-hidden">
-                      <h4 className="text-xs text-slate-200 font-bold truncate">{acc.displayName}</h4>
-                      <p className="text-[11px] text-slate-500 font-mono truncate">@{acc.username}</p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-center pb-3 border-b border-slate-900 mb-3">
-                    <div className="bg-slate-950/40 p-2 rounded border border-slate-900">
-                      <span className="text-[9px] font-mono text-slate-600 block font-bold">FOLLOWERS</span>
-                      <span className="text-xs font-mono font-bold text-slate-300">{acc.followersCount.toLocaleString()}</span>
-                    </div>
-                    <div className="bg-slate-950/40 p-2 rounded border border-slate-900">
-                      <span className="text-[9px] font-mono text-slate-600 block font-bold">MONITORED</span>
-                      <span className="text-xs font-mono font-bold text-slate-300">{acc.postCount} posts</span>
-                    </div>
-                  </div>
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-mono font-bold mb-3 ${
+                  connected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-slate-950 text-slate-500 border border-slate-800'
+                }`}>
+                  {p.icon}
                 </div>
-
-                <div className="flex space-x-2">
-                  <button 
-                    disabled={syncingId === acc.id}
-                    onClick={() => handleSyncAccount(acc.id, acc.username)}
-                    className="flex-1 py-1.5 bg-[#1C1C22] hover:bg-[#25252D] text-slate-300 hover:text-white border border-slate-800 rounded font-mono text-[10.5px] font-bold flex items-center justify-center gap-1.5 transition disabled:opacity-40"
-                    id={`btn-sync-${acc.id}`}
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 text-[#D4AF37] ${syncingId === acc.id ? 'animate-spin' : ''}`} />
-                    Sync API
-                  </button>
-                  <button 
-                    onClick={() => handleDisconnectAccount(acc.id, acc.username)}
-                    className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded hover:border-rose-400 transition"
-                    title="Disconnect account feed"
-                    id={`btn-disc-${acc.id}`}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                <h4 className="text-xs text-slate-200 font-bold mb-1">{p.label}</h4>
+                <div className={`text-[10px] font-mono flex items-center gap-1.5 px-2.5 py-1 rounded ${
+                  connected ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-500 bg-slate-800/20'
+                }`}>
+                  <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                  Scraper {connected ? 'Berjalan' : 'Nonaktif'}
                 </div>
-              </div>
-            );
-          })}
-
-          {/* Connect Accounts Cards */}
-          {['X', 'YouTube', 'TikTok'].map((plat) => {
-            const isConnected = accounts.some(a => a.platform === plat);
-            if (isConnected) return null; // already connected, keep things clean
-            
-            return (
-              <div 
-                key={plat} 
-                className="bg-[#0F0F12]/40 border-2 border-dashed border-slate-800 rounded-xl p-5 flex flex-col justify-center items-center text-center hover:border-amber-500/40 transition"
-                id={`add-soc-${plat.toLowerCase()}`}
-              >
-                <div className="w-10 h-10 rounded-full bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-500 mb-3 text-sm">
-                  {plat === 'X' ? <span className="font-mono font-bold">X</span> :
-                   plat === 'YouTube' ? <Youtube className="w-4 h-4 stroke-1.5" /> : 
-                   <Video className="w-4 h-4 stroke-1.5" />}
-                </div>
-                <h4 className="text-xs text-slate-300 font-bold mb-1">Hubungkan {plat} API</h4>
-                <p className="text-[10px] text-slate-500 max-w-xs mb-4 leading-normal">Otentikasikan profil {plat} Anda untuk menarik jangkauan post digital.</p>
-                
-                <button
-                  onClick={() => handleConnectProfile(plat as any)}
-                  className="px-4 py-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-[#D4AF37] hover:border-[#D4AF37] transition font-mono text-[10.5px] font-bold rounded-lg flex items-center gap-1.5"
-                  id={`btn-connect-${plat.toLowerCase()}`}
-                >
-                  <Plus className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  LINK PROFILE
-                </button>
               </div>
             );
           })}
@@ -538,12 +377,12 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
             <div className="border-b border-slate-800 pb-4 mb-4">
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 <span className="w-1.5 h-3 bg-[#D4AF37] rounded-sm"></span>
-                Top 5 Postings ({selectedPlatform})
+                Top Postings ({showAllTopPosts ? '15' : '5'}) — {selectedPlatform}
               </h3>
               <p className="text-[11px] text-slate-500 mt-0.5">Postingan tersaring dengan volume interaksi agregat terbanyak.</p>
             </div>
 
-            <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
               {topPosts.length === 0 ? (
                 <div className="py-12 text-center text-slate-500 text-xs">
                   No social posts captured. Connect profiles to load posts.
@@ -565,6 +404,17 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
                       <div className="flex items-center space-x-1.5 mb-1.5 pr-8">
                         <span className="font-mono text-[10px] text-amber-500">@{post.authorUsername}</span>
                         <span className="text-[8.5px] text-slate-600 font-mono font-bold uppercase">● {post.platform}</span>
+                        {post.postUrl && (
+                          <a
+                            href={post.postUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ml-auto text-slate-500 hover:text-[#D4AF37] transition"
+                            title="Buka postingan asli"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
                       </div>
 
                       <p className="text-slate-300 text-[11.5px] line-clamp-2 mb-2 leading-relaxed font-sans">{post.text}</p>
@@ -589,6 +439,15 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
                 })
               )}
             </div>
+
+            {hasMorePosts && (
+              <button
+                onClick={() => setShowAllTopPosts(!showAllTopPosts)}
+                className="mt-3 w-full text-[10px] font-mono text-[#D4AF37] bg-[#D4AF37]/5 hover:bg-[#D4AF37]/10 border border-[#D4AF37]/20 rounded-lg py-2 transition cursor-pointer"
+              >
+                {showAllTopPosts ? 'Tampilkan Lebih Sedikit' : `Tampilkan Semua (${sortedPosts.length} postingan)`}
+              </button>
+            )}
           </div>
 
           <div className="pt-3 border-t border-slate-900 mt-4 text-[10.5px] text-slate-500 font-mono text-center">

@@ -3,6 +3,10 @@ dotenv.config();
 
 import express from "express";
 import path from "path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { createServer as createViteServer } from "vite";
 import { INITIAL_CAMPAIGNS, SUSPICIOUS_ACCOUNTS, INITIAL_NETWORK_NODES, INITIAL_NETWORK_LINKS } from "./src/data";
 import { Campaign, UserReport, SuspiciousAccount, NetworkNode, NetworkLink, SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from "./src/types";
@@ -24,88 +28,39 @@ let demographicsData: Record<string, AudienceDemographics> = { ...INITIAL_DEMOGR
 let dailyEngagement: DailyEngagement[] = [];
 
 
-function decodeHtmlEntities(str: string): string {
-  return str
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#39;/g, "'")
-    .replace(/&middot;/g, "·")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+let scraperDir = path.join(process.cwd(), "scrapers");
+
+interface ScraperResult {
+  success: boolean;
+  platform: string;
+  results?: Array<{
+    title: string;
+    url: string;
+    snippet: string;
+    author: string;
+    publishedAt: string;
+    likes: number;
+    comments: number;
+    shares: number;
+    views?: number;
+  }>;
+  error?: string;
 }
 
-async function scrapeDuckDuckGo(keyword: string): Promise<Array<{ title: string; url: string; snippet: string }>> {
+async function runPythonScraper(platform: string, keyword: string, limit = 20): Promise<ScraperResult> {
   try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(keyword)}`;
-    console.log(`[Scraper] Fetching live HTML results from DuckDuckGo: ${url}`);
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
-      }
-    });
-
-    if (!response.ok) {
-      console.warn(`[Scraper] DuckDuckGo responded with status ${response.status}. Falling back to historical OSINT index.`);
-      return [];
-    }
-
-    const html = await response.text();
-    const results: Array<{ title: string; url: string; snippet: string }> = [];
-    
-    // Split on search result dividers in the DuckDuckGo HTML template
-    const resultBlocks = html.split('<div class="result');
-    
-    for (let i = 1; i < resultBlocks.length; i++) {
-      const block = resultBlocks[i];
-      
-      const urlMatch = block.match(/class="result__(?:url|snippet|title|link)"[^>]*?href="([^"]+)"/) 
-        || block.match(/href="([^"]+)"/);
-      
-      const snippetMatch = block.match(/class="result__snippet"[^>]*?>([\s\S]*?)<\/a>/);
-      const titleMatch = block.match(/class="result__title"[^>]*?>([\s\S]*?)<\/a>/)
-        || block.match(/class="result__url"[^>]*?>([\s\S]*?)<\/a>/);
-
-      const rawUrl = urlMatch ? urlMatch[1] : "";
-      
-      let cleanUrl = rawUrl;
-      if (rawUrl.includes("uddg=")) {
-        const parts = rawUrl.split("uddg=");
-        if (parts[1]) {
-          cleanUrl = decodeURIComponent(parts[1].split("&")[0]);
-        }
-      }
-
-      // Avoid matching DDG internal links
-      if (!cleanUrl || cleanUrl.startsWith("/") || cleanUrl.includes("duckduckgo.com/")) {
-        continue;
-      }
-
-      let snippetText = snippetMatch ? snippetMatch[1] : "";
-      snippetText = decodeHtmlEntities(snippetText.replace(/<\/?[^>]+(>|$)/g, ""));
-
-      let titleText = titleMatch ? titleMatch[1] : "";
-      titleText = decodeHtmlEntities(titleText.replace(/<\/?[^>]+(>|$)/g, ""));
-
-      if (snippetText) {
-        results.push({
-          title: titleText || snippetText.substring(0, 50),
-          url: cleanUrl,
-          snippet: snippetText
-        });
-      }
-    }
-
-    console.log(`[Scraper] Successfully parsed ${results.length} live search elements from the web!`);
-    return results;
-  } catch (error) {
-    console.error("[Scraper] DuckDuckGo crawler error:", error);
-    return [];
+    const { stdout } = await execFileAsync("python", [
+      "scrapers/run_scraper.py",
+      platform,
+      "--keyword",
+      keyword,
+      "--limit",
+      String(limit),
+    ], { cwd: process.cwd(), windowsHide: true });
+    return JSON.parse(stdout);
+  } catch (err: any) {
+    console.error(`[Scraper] Python ${platform} scraper error:`, err.message || err);
+    return { success: false, platform, error: err.message };
   }
 }
 
@@ -326,20 +281,18 @@ async function startServer() {
 
       socialAccounts.push(newAccount);
 
-      // Running live real-time web crawler on the connected account username
-      const searchResults = await scrapeDuckDuckGo(`${sanitizedUsername} ${platform}`);
-      const postsCount = postsCountLimit(platform);
+      // Try to fetch real posts from platform scraper
+      const scraperResult = await runPythonScraper(platform === "X" ? "twitter" : platform.toLowerCase(), sanitizedUsername, 4);
       
       const realTexts: string[] = [];
-      if (searchResults && searchResults.length > 0) {
-        searchResults.forEach(r => {
+      if (scraperResult.success && scraperResult.results) {
+        scraperResult.results.forEach(r => {
           if (r.snippet && r.snippet.trim().length > 10) {
             realTexts.push(r.snippet);
           }
         });
       }
 
-      // Safe secondary OSINT fallback texts if crawler returns empty
       const fallbackTexts: string[] = [
         `Menganalisis indikasi paparan kampanye manipulasi digital dan koordinasi siber inautentik (CIB) di media sosial. #SiberWatch`,
         `Melakukan pelacakan taktik penyebaran komentar seragam botnet secara masif hari ini demi kenyamanan pengguna.`,
@@ -348,6 +301,7 @@ async function startServer() {
       ];
 
       const textsToUse = realTexts.length >= 2 ? realTexts : fallbackTexts;
+      const postsCount = 4;
 
       for (let i = 0; i < postsCount; i++) {
         const likes = Math.floor(150 + Math.random() * 2500);
@@ -361,7 +315,7 @@ async function startServer() {
           platform: platform as any,
           authorUsername: sanitizedUsername,
           text: textsToUse[i % textsToUse.length],
-          postUrl: searchResults[i]?.url || `https://${platform.toLowerCase()}.com/${sanitizedUsername}/status/${Math.floor(100000 + Math.random() * 899999)}`,
+          postUrl: scraperResult.results?.[i]?.url || `https://${platform.toLowerCase()}.com/${sanitizedUsername}/status/${Math.floor(100000 + Math.random() * 899999)}`,
           publishedAt: new Date(Date.now() - i * 18 * 60 * 60 * 1000).toISOString(),
           likes,
           comments,
@@ -394,11 +348,6 @@ async function startServer() {
           { category: 'Sulawesi Selatan', value: 10 }
         ]
       };
-
-      // Helper function to return count of items safely
-      function postsCountLimit(plat: string) {
-        return 4;
-      }
 
       return res.json({ success: true, account: newAccount });
 
@@ -809,6 +758,15 @@ async function startServer() {
     res.json({ nodes: networkNodes, links: networkLinks });
   });
 
+  // Scraper connection status
+  app.get("/api/scrapers/status", (req, res) => {
+    res.json({
+      twitter: !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token")),
+      youtube: true,
+      tiktok: !!(process.env.TIKTOK_MS_TOKEN && process.env.TIKTOK_MS_TOKEN.length > 10),
+    });
+  });
+
   // H-2. Search Keyword Narrative OSINT discovery endpoint (Advanced Local Threat Intel Simulation Engine)
   app.post("/api/social/search", async (req, res) => {
     const { keyword } = req.body;
@@ -840,8 +798,17 @@ async function startServer() {
       const tag2 = `#Kawal${cleanKeyword}`;
       const tag3 = `#Fakta${cleanKeyword}`;
 
-      // Running live real-time web parser scraping on the user search keyword!
-      const scrapedData = await scrapeDuckDuckGo(keyword);
+      // Run platform-specific scrapers on the user search keyword
+      const [twitterData, youtubeData, tiktokData] = await Promise.all([
+        runPythonScraper("twitter", keyword, 8),
+        runPythonScraper("youtube", keyword, 8),
+        runPythonScraper("tiktok", keyword, 8),
+      ]);
+      const scrapedData = [
+        ...(twitterData.results || []),
+        ...(youtubeData.results || []),
+        ...(tiktokData.results || []),
+      ];
 
       const generatedAccounts: SuspiciousAccount[] = [];
       const generatedPosts: SocialPost[] = [];
@@ -1061,138 +1028,145 @@ async function startServer() {
         };
       });
 
-      // Platform specific demography models
-      const generatedDemographics: Record<string, AudienceDemographics> = {
-        All: {
-          ageBreakdown: [
-            { category: '13-17', value: 14 },
-            { category: '18-24', value: 45 },
-            { category: '25-34', value: 29 },
-            { category: '35-44', value: 8 },
-            { category: '45-54', value: 3 },
-            { category: '55+', value: 1 }
-          ],
-          genderBreakdown: [
-            { category: 'Male', value: 52 },
-            { category: 'Female', value: 45 },
-            { category: 'Non-binary', value: 3 }
-          ],
-          regionBreakdown: [
-            { category: 'DKI Jakarta', value: 41 },
-            { category: 'Jawa Barat', value: 22 },
-            { category: 'Jawa Timur', value: 15 },
-            { category: 'Sumatera Utara', value: 12 },
-            { category: 'Sulawesi Selatan', value: 10 }
-          ]
-        },
-        X: {
-          ageBreakdown: [
-            { category: '13-17', value: 6 },
-            { category: '18-24', value: 48 },
-            { category: '25-34', value: 33 },
-            { category: '35-44', value: 9 },
-            { category: '45-54', value: 3 },
-            { category: '55+', value: 1 }
-          ],
-          genderBreakdown: [
-            { category: 'Male', value: 58 },
-            { category: 'Female', value: 39 },
-            { category: 'Non-binary', value: 3 }
-          ],
-          regionBreakdown: [
-            { category: 'DKI Jakarta', value: 55 },
-            { category: 'Jawa Barat', value: 16 },
-            { category: 'Jawa Timur', value: 12 },
-            { category: 'Sumatera Utara', value: 9 },
-            { category: 'Sulawesi Selatan', value: 8 }
-          ]
-        },
-        YouTube: {
-          ageBreakdown: [
-            { category: '13-17', value: 15 },
-            { category: '18-24', value: 36 },
-            { category: '25-34', value: 28 },
-            { category: '35-44', value: 11 },
-            { category: '45-54', value: 7 },
-            { category: '55+', value: 3 }
-          ],
-          genderBreakdown: [
-            { category: 'Male', value: 55 },
-            { category: 'Female', value: 42 },
-            { category: 'Non-binary', value: 3 }
-          ],
-          regionBreakdown: [
-            { category: 'DKI Jakarta', value: 37 },
-            { category: 'Jawa Barat', value: 24 },
-            { category: 'Jawa Timur', value: 16 },
-            { category: 'Sumatera Utara', value: 12 },
-            { category: 'Sulawesi Selatan', value: 11 }
-          ]
-        },
-        TikTok: {
-          ageBreakdown: [
-            { category: '13-17', value: 31 },
-            { category: '18-24', value: 47 },
-            { category: '25-34', value: 15 },
-            { category: '35-44', value: 5 },
-            { category: '45-54', value: 1 },
-            { category: '55+', value: 1 }
-          ],
-          genderBreakdown: [
-            { category: 'Male', value: 40 },
-            { category: 'Female', value: 57 },
-            { category: 'Non-binary', value: 3 }
-          ],
-          regionBreakdown: [
-            { category: 'DKI Jakarta', value: 31 },
-            { category: 'Jawa Barat', value: 29 },
-            { category: 'Jawa Timur', value: 18 },
-            { category: 'Sumatera Utara', value: 12 },
-            { category: 'Sulawesi Selatan', value: 10 }
-          ]
-        }
+      // Platform-specific baseline demographics
+      const baselineAge: Record<string, { category: string; value: number }[]> = {
+        X: [{ category: '13-17', value: 6 }, { category: '18-24', value: 48 }, { category: '25-34', value: 33 }, { category: '35-44', value: 9 }, { category: '45-54', value: 3 }, { category: '55+', value: 1 }],
+        YouTube: [{ category: '13-17', value: 15 }, { category: '18-24', value: 36 }, { category: '25-34', value: 28 }, { category: '35-44', value: 11 }, { category: '45-54', value: 7 }, { category: '55+', value: 3 }],
+        TikTok: [{ category: '13-17', value: 31 }, { category: '18-24', value: 47 }, { category: '25-34', value: 15 }, { category: '35-44', value: 5 }, { category: '45-54', value: 1 }, { category: '55+', value: 1 }],
+      };
+      const baselineGender: Record<string, { category: string; value: number }[]> = {
+        X: [{ category: 'Male', value: 58 }, { category: 'Female', value: 39 }, { category: 'Non-binary', value: 3 }],
+        YouTube: [{ category: 'Male', value: 55 }, { category: 'Female', value: 42 }, { category: 'Non-binary', value: 3 }],
+        TikTok: [{ category: 'Male', value: 40 }, { category: 'Female', value: 57 }, { category: 'Non-binary', value: 3 }],
+      };
+      const baselineRegion: Record<string, { category: string; value: number }[]> = {
+        X: [{ category: 'DKI Jakarta', value: 55 }, { category: 'Jawa Barat', value: 16 }, { category: 'Jawa Timur', value: 12 }, { category: 'Sumatera Utara', value: 9 }, { category: 'Sulawesi Selatan', value: 8 }],
+        YouTube: [{ category: 'DKI Jakarta', value: 37 }, { category: 'Jawa Barat', value: 24 }, { category: 'Jawa Timur', value: 16 }, { category: 'Sumatera Utara', value: 12 }, { category: 'Sulawesi Selatan', value: 11 }],
+        TikTok: [{ category: 'DKI Jakarta', value: 31 }, { category: 'Jawa Barat', value: 29 }, { category: 'Jawa Timur', value: 18 }, { category: 'Sumatera Utara', value: 12 }, { category: 'Sulawesi Selatan', value: 10 }],
       };
 
-      // Construct live dynamic 13 Nodes Network Graph mapping
+      // Count actual posts per platform from scraped data
+      const platformCounts: Record<string, number> = { X: 0, YouTube: 0, TikTok: 0 };
+      generatedPosts.forEach(p => { if (platformCounts[p.platform] !== undefined) platformCounts[p.platform]++; });
+      const totalPosts = generatedPosts.length || 1;
+      const platformWeight: Record<string, number> = {
+        X: platformCounts.X / totalPosts,
+        YouTube: platformCounts.YouTube / totalPosts,
+        TikTok: platformCounts.TikTok / totalPosts,
+      };
+
+      // Helper: weighted average of demographic segments across platforms
+      const weightedDemographics = (
+        baseline: Record<string, { category: string; value: number }[]>
+      ): { category: string; value: number }[] => {
+        const allCategories = new Set<string>();
+        Object.values(baseline).forEach(segments => segments.forEach(s => allCategories.add(s.category)));
+        return Array.from(allCategories).map(cat => {
+          let weighted = 0;
+          for (const plat of ['X', 'YouTube', 'TikTok'] as const) {
+            const seg = baseline[plat].find(s => s.category === cat);
+            if (seg) weighted += seg.value * platformWeight[plat];
+          }
+          const variance = Math.max(-3, Math.min(3, (keyword.length % 7) - 3));
+          return { category: cat, value: Math.round(Math.max(1, weighted + variance * (cat === 'Non-binary' ? 0.5 : 1))) };
+        });
+      };
+
+      const ageAll = weightedDemographics(baselineAge);
+      const genderAll = weightedDemographics(baselineGender);
+      const regionAll = weightedDemographics(baselineRegion);
+
+      // Normalize each array to sum to 100
+      const normalize = (arr: { category: string; value: number }[]) => {
+        const sum = arr.reduce((a, b) => a + b.value, 0);
+        if (sum === 0) return arr;
+        // adjust largest to make exactly 100
+        const diff = 100 - sum;
+        const max = arr.reduce((a, b) => a.value > b.value ? a : b);
+        max.value += diff;
+        return arr;
+      };
+
+      // Build per-platform demographics (slight variance so each scan is unique)
+      const perPlatform = (plat: 'X' | 'YouTube' | 'TikTok', jitter: number): AudienceDemographics => {
+        const jitterAge = (v: number) => Math.max(1, v + Math.round((Math.random() - 0.5) * jitter));
+        const jitterGender = (v: number) => Math.max(1, v + Math.round((Math.random() - 0.5) * (jitter * 0.6)));
+        return {
+          ageBreakdown: normalize(baselineAge[plat].map(s => ({ ...s, value: jitterAge(s.value) }))),
+          genderBreakdown: normalize(baselineGender[plat].map(s => ({ ...s, value: jitterGender(s.value) }))),
+          regionBreakdown: normalize(baselineRegion[plat].map(s => ({ ...s, value: jitterAge(s.value) }))),
+        };
+      };
+
+      const generatedDemographics: Record<string, AudienceDemographics> = {
+        All: { ageBreakdown: normalize(ageAll), genderBreakdown: normalize(genderAll), regionBreakdown: normalize(regionAll) },
+        X: perPlatform('X', 4),
+        YouTube: perPlatform('YouTube', 4),
+        TikTok: perPlatform('TikTok', 4),
+      };
+
+      // Construct live dynamic expanded Network Graph mapping
       const generatedNodes: NetworkNode[] = [
         { id: 'narrative-main', label: `${keyword.substring(0, 16)} Hub`, group: 'campaign', size: 28 },
-        { id: 'master-1', label: 'PR Agency Bot Controller', group: 'buzzer_master', size: 22, botScore: 84 }
+        { id: 'master-1', label: 'PR Agency Bot Controller', group: 'buzzer_master', size: 22, botScore: 84 },
+        { id: 'master-2', label: 'Political Ops Master', group: 'buzzer_master', size: 20, botScore: 78 },
+        { id: 'master-3', label: 'Influence Broker', group: 'buzzer_master', size: 20, botScore: 82 },
+        // Platform sub-hubs
+        { id: 'platform-x', label: 'X Platform Hub', group: 'platform_hub', size: 16, platform: 'X' },
+        { id: 'platform-youtube', label: 'YouTube Platform Hub', group: 'platform_hub', size: 16, platform: 'YouTube' },
+        { id: 'platform-tiktok', label: 'TikTok Platform Hub', group: 'platform_hub', size: 16, platform: 'TikTok' },
       ];
       const generatedLinks: NetworkLink[] = [
-        { source: 'narrative-main', target: 'master-1', value: 6 }
+        { source: 'narrative-main', target: 'master-1', value: 8 },
+        { source: 'narrative-main', target: 'master-2', value: 7 },
+        { source: 'narrative-main', target: 'master-3', value: 7 },
+        { source: 'master-1', target: 'platform-x', value: 6 },
+        { source: 'master-2', target: 'platform-youtube', value: 6 },
+        { source: 'master-3', target: 'platform-tiktok', value: 6 },
       ];
 
-      // Add hashtags mapping
-      hashtagsArray.slice(0, 3).forEach((tag, idx) => {
+      // Add hashtags mapping (up to 6)
+      hashtagsArray.slice(0, 6).forEach((tag, idx) => {
         generatedNodes.push({
-          id: `hash-${idx}`,
+          id: `hash-${idx + 1}`,
           label: tag,
           group: 'hashtag',
           size: 18
         });
+        const masterTarget = idx < 2 ? 'master-1' : idx < 4 ? 'master-2' : 'master-3';
+        generatedLinks.push({
+          source: masterTarget,
+          target: `hash-${idx + 1}`,
+          value: 9 - idx
+        });
         generatedLinks.push({
           source: 'narrative-main',
-          target: `hash-${idx}`,
-          value: 9 - idx
+          target: `hash-${idx + 1}`,
+          value: 6 - idx
         });
       });
 
-      // Add accounts mapping
-      generatedAccounts.slice(0, 8).forEach((acc, idx) => {
+      // Add accounts mapping (up to 20)
+      generatedAccounts.slice(0, 20).forEach((acc, idx) => {
+        const platformLabel = acc.platform || (idx % 3 === 0 ? 'X' : idx % 3 === 1 ? 'YouTube' : 'TikTok');
+        const post = generatedPosts[idx];
         generatedNodes.push({
-          id: `bot-${idx}`,
-          label: `@${acc.username}`,
+          id: `bot-${idx + 1}`,
+          label: `@${acc.username || `user${idx + 1}`}`,
           group: 'buzzer_node',
-          size: 12,
-          botScore: acc.botScore,
-          platform: acc.platform
+          size: 11,
+          botScore: acc.botScore || Math.floor(40 + Math.random() * 55),
+          platform: platformLabel,
+          postText: post?.text || "",
+          postUrl: post?.postUrl || ""
         });
 
-        const targetHashId = `hash-${idx % Math.min(3, hashtagsArray.length)}`;
+        const hashCount = Math.min(6, hashtagsArray.length);
+        const targetHashId = `hash-${(idx % hashCount) + 1}`;
         generatedLinks.push({
           source: targetHashId,
-          target: `bot-${idx}`,
-          value: Math.floor(6 + Math.random() * 4)
+          target: `bot-${idx + 1}`,
+          value: Math.floor(4 + Math.random() * 5)
         });
       });
 

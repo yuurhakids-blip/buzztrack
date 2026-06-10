@@ -14,6 +14,7 @@ import {
   LineChart, 
   CornerDownRight, 
   TrendingUp,
+  CalendarDays,
   X as CloseIcon,
   CheckCircle,
   Clock,
@@ -21,7 +22,8 @@ import {
   Cpu,
   RefreshCw
 } from 'lucide-react';
-import { Campaign, SuspiciousAccount, Platform, AnalysisResponse, UserReport } from './types';
+import { Campaign, SuspiciousAccount, Platform, AnalysisResponse } from './types';
+import { api } from './api';
 import NetworkGraph from './components/NetworkGraph';
 import SocialAnalyticsDashboard from './components/SocialAnalyticsDashboard';
 
@@ -71,6 +73,10 @@ export default function App() {
   const [isSearchingKeyword, setIsSearchingKeyword] = useState(false);
   const [currentKeyword, setCurrentKeyword] = useState('');
   const [reloadTrigger, setReloadTrigger] = useState(0);
+  const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
+    start: '',
+    end: '',
+  });
 
   const handleKeywordSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,23 +87,11 @@ export default function App() {
 
     setIsSearchingKeyword(true);
     try {
-      const response = await fetch('/api/social/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ keyword: searchKeywordInput })
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || 'Terjadi kesalahan saat memproses rute pemindaian.');
-      }
+      await api.social.search(searchKeywordInput);
 
       setCurrentKeyword(searchKeywordInput);
       setReloadTrigger(prev => prev + 1);
       
-      // Pull newly generated data
       await fetchData();
       
       showNotification('success', `Berhasil mendeteksi jaringan buzzer untuk kata kunci: "${searchKeywordInput}"`);
@@ -114,13 +108,7 @@ export default function App() {
     setCurrentKeyword('');
     setIsSearchingKeyword(true);
     try {
-      await fetch('/api/social/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ keyword: "Reset_Siber_Clean_Slate" })
-      });
+      await api.social.search("Reset_Siber_Clean_Slate");
       setReloadTrigger(prev => prev + 1);
       await fetchData();
       showNotification('success', 'Berhasil mereset penyelidikan siber ke kondisi awal.');
@@ -138,27 +126,20 @@ export default function App() {
 
   const fetchData = async () => {
     try {
-      const [cRes, aRes, sRes] = await Promise.all([
-        fetch('/api/campaigns'),
-        fetch('/api/accounts'),
-        fetch('/api/stats')
+      const [cData, aData, sData] = await Promise.all([
+        api.campaigns.list(),
+        api.accounts.list(),
+        api.stats.get()
       ]);
+      setCampaigns(cData);
+      setAccounts(aData);
+      setStats(sData);
 
-      if (cRes.ok && aRes.ok && sRes.ok) {
-        const cData = await cRes.json();
-        const aData = await aRes.json();
-        const sData = await sRes.json();
-        setCampaigns(cData);
-        setAccounts(aData);
-        setStats(sData);
-
-        // Pre-select first item in details if nothing selected
-        if (cData.length > 0 && !selectedCampaign) {
-          setSelectedCampaign(cData[0]);
-        }
-        if (aData.length > 0 && !selectedAccount) {
-          setSelectedAccount(aData[0]);
-        }
+      if (cData.length > 0 && !selectedCampaign) {
+        setSelectedCampaign(cData[0]);
+      }
+      if (aData.length > 0 && !selectedAccount) {
+        setSelectedAccount(aData[0]);
       }
     } catch (error) {
       console.error("Error loading intelligence data:", error);
@@ -243,29 +224,17 @@ export default function App() {
     setAnalysisResult(null);
 
     try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: analyzeType,
-          content: analyzeContent,
-          platform: analyzePlatform
-        })
+      const data = await api.analyze({
+        type: analyzeType,
+        content: analyzeContent,
+        platform: analyzePlatform
       });
-
-      if (response.ok) {
-        const data: AnalysisResponse = await response.json();
-        setAnalysisResult(data);
-        showNotification('success', `Analysis completed with verdict: ${data.verdict}`);
-        // Increment statistics and live-sync list!
-        fetchData();
-      } else {
-        const errObj = await response.json();
-        showNotification('error', errObj.error || 'Server returned deep analysis error.');
-      }
-    } catch (err) {
+      setAnalysisResult(data);
+      showNotification('success', `Analysis completed with verdict: ${data.verdict}`);
+      fetchData();
+    } catch (err: any) {
       console.error(err);
-      showNotification('error', 'Connection timed out during heavy intelligence query.');
+      showNotification('error', err.message || 'Connection timed out during heavy intelligence query.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -281,45 +250,40 @@ export default function App() {
 
     setIsSubmittingReport(true);
     try {
-      const response = await fetch('/api/reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: reportUrl,
-          username: reportUsername,
-          platform: reportPlatform,
-          narrative: reportNarrative,
-          evidence: reportEvidence,
-          email: reportEmail
-        })
+      await api.reports.submit({
+        url: reportUrl,
+        username: reportUsername,
+        platform: reportPlatform,
+        narrative: reportNarrative,
+        evidence: reportEvidence,
+        email: reportEmail
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        showNotification('success', 'Incident vector logged successfully. Synchronization updated live!');
-        // Reset Form
-        setReportUrl('');
-        setReportUsername('');
-        setReportNarrative('');
-        setReportEvidence('');
-        setReportEmail('');
-        
-        // Refresh tables with newly generated campaign or account
-        fetchData();
-        // Redirect to live campaigns/accounts to see changes
-        if (reportUsername) {
-          setActiveTab('accounts');
-        } else {
-          setActiveTab('campaigns');
-        }
+      showNotification('success', 'Incident vector logged successfully. Synchronization updated live!');
+      setReportUrl('');
+      setReportUsername('');
+      setReportNarrative('');
+      setReportEvidence('');
+      setReportEmail('');
+      fetchData();
+      if (reportUsername) {
+        setActiveTab('accounts');
       } else {
-        showNotification('error', 'Failed to publish incident record. Verify inputs.');
+        setActiveTab('campaigns');
       }
-    } catch (err) {
-      showNotification('error', 'API unavailable during incident propagation.');
+    } catch (err: any) {
+      showNotification('error', err.message || 'API unavailable during incident propagation.');
     } finally {
       setIsSubmittingReport(false);
     }
+  };
+
+  // Date range helper
+  const matchesDateRange = (date?: string) => {
+    if (!dateRange.start && !dateRange.end) return true;
+    const d = date || '';
+    if (dateRange.start && d < dateRange.start) return false;
+    if (dateRange.end && d > dateRange.end) return false;
+    return true;
   };
 
   // Custom styling filters
@@ -329,7 +293,8 @@ export default function App() {
       c.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
       c.topic.toLowerCase().includes(searchQuery.toLowerCase()) ||
       c.description.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesPlatform && matchesSearch;
+    const matchesDate = matchesDateRange(c.startDate);
+    return matchesPlatform && matchesSearch && matchesDate;
   });
 
   const filteredAccounts = accounts.filter(a => {
@@ -338,7 +303,8 @@ export default function App() {
       a.username.toLowerCase().includes(searchQuery.toLowerCase()) || 
       a.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       a.reason.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesPlatform && matchesSearch;
+    const matchesDate = matchesDateRange(a.lastActive);
+    return matchesPlatform && matchesSearch && matchesDate;
   });
 
   return (
@@ -573,6 +539,33 @@ export default function App() {
                 </p>
               </div>
             )}
+          </div>
+
+          {/* Time Range Filter */}
+          <div className="border-t border-[#2A2A2E] pt-5 mt-5">
+            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#66666E]/90 mb-3 flex items-center gap-1.5 font-bold">
+              <CalendarDays className="w-3.5 h-3.5 text-[#D4AF37]" /> Jenjang Waktu
+            </h3>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="text-[9px] font-mono text-slate-600 uppercase block mb-1">Mulai</label>
+                <input
+                  type="date"
+                  value={dateRange.start}
+                  onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                  className="w-full text-[11px] bg-slate-950 border border-slate-800 rounded-lg py-2 px-2.5 text-slate-300 focus:outline-none focus:border-[#D4AF37]/50"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="text-[9px] font-mono text-slate-600 uppercase block mb-1">Akhir</label>
+                <input
+                  type="date"
+                  value={dateRange.end}
+                  onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                  className="w-full text-[11px] bg-slate-950 border border-slate-800 rounded-lg py-2 px-2.5 text-slate-300 focus:outline-none focus:border-[#D4AF37]/50"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="mt-auto hidden xl:block pt-4">
@@ -895,7 +888,20 @@ export default function App() {
                                 {acc.platform}
                               </span>
                             </h4>
-                            <p className="text-[11px] text-[#A0A0A5] font-mono mt-0.5">@{acc.username}</p>
+                            <p className="text-[11px] text-[#A0A0A5] font-mono mt-0.5 flex items-center gap-1">
+                              @{acc.username}
+                              {(() => {
+                                const url = acc.platform === 'X' ? `https://x.com/${acc.username}`
+                                  : acc.platform === 'YouTube' ? `https://youtube.com/@${acc.username}`
+                                  : acc.platform === 'TikTok' ? `https://tiktok.com/@${acc.username}`
+                                  : null;
+                                return url ? (
+                                  <a href={url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-slate-600 hover:text-[#D4AF37] transition" title="Buka profil">
+                                    <ExternalLink className="w-2.5 h-2.5" />
+                                  </a>
+                                ) : null;
+                              })()}
+                            </p>
                           </div>
                         </div>
 
@@ -926,7 +932,20 @@ export default function App() {
                             <h3 className="text-slate-100 text-sm font-bold tracking-tight">
                               {selectedAccount.displayName}
                             </h3>
-                            <p className="text-xs text-amber-500 font-mono mt-0.5">@{selectedAccount.username} on {selectedAccount.platform}</p>
+                            <p className="text-xs text-amber-500 font-mono mt-0.5 flex items-center gap-1.5">
+                              @{selectedAccount.username} on {selectedAccount.platform}
+                              {(() => {
+                                const profileUrl = selectedAccount.platform === 'X' ? `https://x.com/${selectedAccount.username}`
+                                  : selectedAccount.platform === 'YouTube' ? `https://youtube.com/@${selectedAccount.username}`
+                                  : selectedAccount.platform === 'TikTok' ? `https://tiktok.com/@${selectedAccount.username}`
+                                  : null;
+                                return profileUrl ? (
+                                  <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="text-slate-500 hover:text-[#D4AF37] transition" title="Buka profil asli">
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                ) : null;
+                              })()}
+                            </p>
                           </div>
                         </div>
                         
@@ -938,6 +957,17 @@ export default function App() {
                           }`}>
                             {selectedAccount.status}
                           </span>
+                          {(() => {
+                            const profileUrl = selectedAccount.platform === 'X' ? `https://x.com/${selectedAccount.username}`
+                              : selectedAccount.platform === 'YouTube' ? `https://youtube.com/@${selectedAccount.username}`
+                              : selectedAccount.platform === 'TikTok' ? `https://tiktok.com/@${selectedAccount.username}`
+                              : null;
+                            return profileUrl ? (
+                              <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 border border-slate-700 text-[11px] font-mono px-2.5 py-1 rounded transition duration-200 flex items-center gap-1">
+                                <ExternalLink className="w-3 h-3" /> Buka Profil
+                              </a>
+                            ) : null;
+                          })()}
                           <button 
                             onClick={() => {
                               setAnalyzeContent(`Suspected buzzer account footprint details:\nUsername: @${selectedAccount.username}\nPlatform: ${selectedAccount.platform}\nIndicators: ${selectedAccount.reason}. Followers: ${selectedAccount.followers}. Frequency counter: ${selectedAccount.recentCopypastaCount} boilerplate comments logged.`);
@@ -1047,7 +1077,7 @@ export default function App() {
               </div>
 
               {/* Direct insertion of interactive Network Canvas */}
-              <NetworkGraph onSelectNode={handleNodeSelect} reloadTrigger={reloadTrigger} />
+              <NetworkGraph onSelectNode={handleNodeSelect} reloadTrigger={reloadTrigger} dateRange={dateRange} />
 
               {/* Auxiliary details explaining the map */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-[#0F0F12] border border-[#2A2A2E] p-5 rounded-2xl relative" id="graph-legends-container">
@@ -1076,7 +1106,7 @@ export default function App() {
 
           {/* TAB 3.5: Social Accounts & Analytics Dashboard */}
           {activeTab === 'analytics' && (
-            <SocialAnalyticsDashboard showNotification={showNotification} reloadTrigger={reloadTrigger} />
+            <SocialAnalyticsDashboard showNotification={showNotification} reloadTrigger={reloadTrigger} dateRange={dateRange} />
           )}
 
           {/* TAB 4: Gemini-powered Analyzer Playground */}

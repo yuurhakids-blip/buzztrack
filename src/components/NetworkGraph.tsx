@@ -1,29 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import { NetworkNode, NetworkLink } from '../types';
-import { Shield, AlertTriangle, Radio, Hash, UserCheck, HelpCircle } from 'lucide-react';
+import { api } from '../api';
+import { Shield, AlertTriangle, Radio, Hash, UserCheck, HelpCircle, ExternalLink } from 'lucide-react';
 
 interface NetworkGraphProps {
   onSelectNode?: (nodeId: string, label: string, botScore?: number) => void;
   reloadTrigger?: number;
+  dateRange?: { start: string; end: string };
 }
 
-export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGraphProps) {
+export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }: NetworkGraphProps) {
   const [nodes, setNodes] = useState<NetworkNode[]>([]);
   const [links, setLinks] = useState<NetworkLink[]>([]);
   const [selectedNode, setSelectedNode] = useState<NetworkNode | null>(null);
   const [hoveredNode, setHoveredNode] = useState<NetworkNode | null>(null);
   const [platformFilter, setPlatformFilter] = useState<string>('All');
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const nodeRef = React.useRef<HTMLDivElement>(null);
 
-  // Load physical graph structures from memory API
   useEffect(() => {
-    fetch('/api/network')
-      .then(res => res.json())
+    api.network.get()
       .then(data => {
         if (data.nodes) {
           setNodes(data.nodes);
           setLinks(data.links || []);
-          
-          // Try to select central campaign node initially
           const mainHub = data.nodes.find((n: NetworkNode) => n.id === 'narrative-main');
           if (mainHub) {
             setSelectedNode(mainHub);
@@ -46,25 +49,52 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
       });
   }, [reloadTrigger]);
 
-  // SVG Dimension Constants
-  const width = 600;
-  const height = 400;
+  // SVG Dimension Constants — larger canvas for expanded coordination map
+  const width = 800;
+  const height = 500;
 
   // Manual structured layout positions for nodes to keep them beautiful, balanced, and responsive in React without non-deterministic layout bugs
   const positions: Record<string, { x: number; y: number }> = {
-    'narrative-main': { x: 300, y: 200 },
-    'master-1': { x: 180, y: 150 },
-    'master-2': { x: 420, y: 150 },
-    'hash-1': { x: 200, y: 280 },
-    'hash-2': { x: 400, y: 280 },
-    'hash-3': { x: 300, y: 90 },
-    'bot-1': { x: 100, y: 220 },
-    'bot-2': { x: 130, y: 340 },
-    'bot-3': { x: 300, y: 350 },
-    'bot-4': { x: 500, y: 220 },
-    'bot-5': { x: 510, y: 330 },
-    'bot-6': { x: 410, y: 360 },
-    'bot-7': { x: 230, y: 40 }
+    // Central campaign hub
+    'narrative-main': { x: 400, y: 250 },
+    // Buzzer masters (3)
+    'master-1': { x: 250, y: 180 },
+    'master-2': { x: 550, y: 180 },
+    'master-3': { x: 400, y: 120 },
+    // Hashtag nodes (6)
+    'hash-1': { x: 200, y: 340 },
+    'hash-2': { x: 600, y: 340 },
+    'hash-3': { x: 300, y: 70 },
+    'hash-4': { x: 500, y: 70 },
+    'hash-5': { x: 130, y: 250 },
+    'hash-6': { x: 670, y: 250 },
+    // Bot nodes related to X platform (left cluster)
+    'bot-1': { x: 80, y: 180 },
+    'bot-2': { x: 110, y: 310 },
+    'bot-3': { x: 160, y: 420 },
+    'bot-4': { x: 200, y: 470 },
+    'bot-5': { x: 60, y: 380 },
+    'bot-6': { x: 140, y: 130 },
+    'bot-7': { x: 270, y: 50 },
+    // Bot nodes related to YouTube platform (right cluster)
+    'bot-8': { x: 660, y: 130 },
+    'bot-9': { x: 640, y: 310 },
+    'bot-10': { x: 700, y: 380 },
+    'bot-11': { x: 730, y: 180 },
+    'bot-12': { x: 580, y: 420 },
+    'bot-13': { x: 690, y: 460 },
+    // Bot nodes — TikTok / cross-platform (bottom area)
+    'bot-14': { x: 330, y: 440 },
+    'bot-15': { x: 470, y: 440 },
+    'bot-16': { x: 380, y: 370 },
+    'bot-17': { x: 520, y: 370 },
+    'bot-18': { x: 260, y: 390 },
+    'bot-19': { x: 540, y: 480 },
+    'bot-20': { x: 420, y: 490 },
+    // Platform sub-hubs (X / YouTube / TikTok grouping nodes)
+    'platform-x': { x: 130, y: 80 },
+    'platform-youtube': { x: 670, y: 80 },
+    'platform-tiktok': { x: 400, y: 30 },
   };
 
   const filteredNodes = nodes.filter(node => {
@@ -85,21 +115,34 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
     }
   };
 
-  const getGroupColor = (group: string, score?: number) => {
+  const getGroupColor = (group: string, score?: number, platform?: string) => {
     if (group === 'campaign') return 'fill-indigo-500 stroke-indigo-300';
+    if (group === 'platform_hub') {
+      if (platform === 'X') return 'fill-sky-500 stroke-sky-300';
+      if (platform === 'YouTube') return 'fill-red-500 stroke-red-300';
+      if (platform === 'TikTok') return 'fill-cyan-500 stroke-cyan-300';
+      return 'fill-purple-500 stroke-purple-300';
+    }
     if (group === 'hashtag') return 'fill-teal-500 stroke-teal-300';
     if (group === 'buzzer_master') {
       if (score && score > 80) return 'fill-rose-500 stroke-rose-300';
       return 'fill-orange-400 stroke-orange-200';
     }
-    // bot node
-    if (score && score > 90) return 'fill-red-600 stroke-red-400';
-    if (score && score > 75) return 'fill-red-400 stroke-red-200';
-    return 'fill-yellow-500 stroke-yellow-300';
+    // bot node with platform-flavored fill
+    const base = score && score > 90 ? ' fill-red-600 stroke-red-400'
+      : score && score > 75 ? ' fill-red-400 stroke-red-200'
+      : ' fill-yellow-500 stroke-yellow-300';
+    if (platform === 'X') return 'fill-cyan-800 stroke-cyan-500' + base.slice(base.lastIndexOf(';'));
+    return base;
   };
 
-  const getIconForGroup = (group: string, score?: number) => {
+  const getIconForGroup = (group: string, score?: number, platform?: string) => {
     if (group === 'campaign') return <Radio className="w-5 h-5 text-indigo-400" />;
+    if (group === 'platform_hub') {
+      if (platform === 'X') return <span className="text-[10px] font-black text-sky-300">X</span>;
+      if (platform === 'YouTube') return <span className="text-[10px] font-black text-red-300">YT</span>;
+      if (platform === 'TikTok') return <span className="text-[10px] font-black text-cyan-300">TK</span>;
+    }
     if (group === 'hashtag') return <Hash className="w-5 h-5 text-teal-400" />;
     if (group === 'buzzer_master') return <AlertTriangle className="w-5 h-5 text-orange-400" id="icon-warning-master" />;
     if (score && score > 85) return <Shield className="w-5 h-5 text-red-500" />;
@@ -139,10 +182,32 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
         </div>
 
         {/* SVG Drawing Canvas */}
-        <div className="relative w-full bg-slate-950/80 rounded-xl border border-slate-900 overflow-hidden flex justify-center items-center h-[380px]">
+        <div
+          ref={nodeRef}
+          className="relative w-full bg-slate-950/80 rounded-xl border border-slate-900 overflow-hidden h-[480px] select-none"
+          onMouseDown={(e) => {
+            if ((e.target as HTMLElement).closest('svg') || e.target === nodeRef.current) {
+              setIsDragging(true);
+              setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+            }
+          }}
+          onMouseMove={(e) => {
+            if (isDragging) {
+              setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+            }
+          }}
+          onMouseUp={() => setIsDragging(false)}
+          onMouseLeave={() => setIsDragging(false)}
+          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+        >
+          <div
+            style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center center' }}
+            className="transition-transform duration-200 flex items-center justify-center"
+          >
           <svg
             viewBox={`0 0 ${width} ${height}`}
-            className="w-full h-full select-none"
+            className="select-none"
+            style={{ width, height }}
             id="network-svg"
           >
             {/* Defs for gradients & patterns */}
@@ -158,7 +223,10 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
             </defs>
 
             {/* Hub ambient glow */}
-            <circle cx="300" cy="200" r="140" fill="url(#hubbg)" className="pointer-events-none" />
+            <circle cx="400" cy="250" r="180" fill="url(#hubbg)" className="pointer-events-none" />
+            <circle cx="130" cy="80" r="60" fill="url(#hubbg)" className="pointer-events-none" opacity="0.5" />
+            <circle cx="670" cy="80" r="60" fill="url(#hubbg)" className="pointer-events-none" opacity="0.5" />
+            <circle cx="400" cy="30" r="60" fill="url(#hubbg)" className="pointer-events-none" opacity="0.5" />
 
             {/* Connection Links */}
             {filteredLinks.map((link, idx) => {
@@ -233,7 +301,7 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
                   {/* Node fill body */}
                   <circle
                     r={isSelected ? node.size + 3 : node.size}
-                    className={`transition-all duration-300 stroke-[2px] ${getGroupColor(node.group, node.botScore)} ${
+                    className={`transition-all duration-300 stroke-[2px] ${getGroupColor(node.group, node.botScore, node.platform)} ${
                       isSelected || isHovered || isRelated ? 'opacity-100' : 'opacity-85'
                     }`}
                   />
@@ -267,11 +335,36 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
               );
             })}
           </svg>
-          <div className="absolute bottom-3 left-3 flex gap-4 text-[9px] bg-slate-950/95 backdrop-blur px-3 py-1.5 rounded-lg border border-slate-800/80 text-slate-400 font-mono">
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-indigo-500"></span> Campaign Hub</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400"></span> Propagandist Master</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-teal-500"></span> Hashtag Node</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500"></span> Bot Client (Suspicious)</div>
+          </div>
+          {/* Zoom controls */}
+          <div className="absolute top-3 right-3 flex gap-1">
+            <button
+              onClick={() => setZoom(prev => Math.min(3, prev + 0.2))}
+              className="w-7 h-7 bg-slate-950/90 border border-slate-800 rounded text-[11px] text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer flex items-center justify-center font-bold"
+              title="Perbesar"
+            >+</button>
+            <button
+              onClick={() => setZoom(prev => Math.max(0.3, prev - 0.2))}
+              className="w-7 h-7 bg-slate-950/90 border border-slate-800 rounded text-[11px] text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer flex items-center justify-center font-bold"
+              title="Perkecil"
+            >−</button>
+            <button
+              onClick={() => setZoom(1)}
+              className="w-7 h-7 bg-slate-950/90 border border-slate-800 rounded text-[9px] text-slate-500 hover:text-white hover:bg-slate-800 transition cursor-pointer flex items-center justify-center font-mono"
+              title="Reset zoom"
+            >↺</button>
+          </div>
+          <div className="absolute bottom-3 left-3 flex gap-3 text-[9px] bg-slate-950/95 backdrop-blur px-3 py-1.5 rounded-lg border border-slate-800/80 text-slate-400 font-mono flex-wrap">
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-indigo-500"></span> Campaign</div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400"></span> Master</div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-teal-500"></span> Hashtag</div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500"></span> Bot</div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-sky-500"></span> X Hub</div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-600"></span> YT Hub</div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-cyan-500"></span> TK Hub</div>
+          </div>
+          <div className="absolute bottom-3 right-3 text-[9px] text-slate-600 font-mono">
+            {Math.round(zoom * 100)}%
           </div>
         </div>
       </div>
@@ -285,6 +378,7 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
                 <span className={`text-[10px] uppercase tracking-wider font-semibold font-mono px-2 py-0.5 rounded ${
                   selectedNode.group === 'campaign' ? 'bg-indigo-500/20 text-indigo-400' :
                   selectedNode.group === 'hashtag' ? 'bg-teal-500/20 text-teal-400' :
+                  selectedNode.group === 'platform_hub' ? 'bg-purple-500/20 text-purple-400' :
                   'bg-rose-500/20 text-rose-400'
                 }`}>
                   {selectedNode.group.replace('_', ' ')}
@@ -338,6 +432,24 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger }: NetworkGra
                      selectedNode.botScore > 50 ? 'Moderate anomalous patterns. Exhibits coordinated copy-paste traits.' :
                      'Authentic individual activity model or established human organizer.'}
                   </p>
+                </div>
+              )}
+
+              {/* Post Content Preview */}
+              {selectedNode.postText && (
+                <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800/60 mb-4">
+                  <h5 className="text-[11px] uppercase tracking-wider font-bold text-slate-400 font-mono mb-2">Postingan Terkait</h5>
+                  <p className="text-[11px] text-slate-300 leading-relaxed line-clamp-4 mb-2">{selectedNode.postText}</p>
+                  {selectedNode.postUrl && (
+                    <a
+                      href={selectedNode.postUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] font-mono text-[#D4AF37] hover:text-amber-300 transition"
+                    >
+                      <ExternalLink className="w-3 h-3" /> Buka postingan asli
+                    </a>
+                  )}
                 </div>
               )}
 
