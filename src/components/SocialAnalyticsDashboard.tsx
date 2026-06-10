@@ -142,11 +142,12 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
         showNotification('success', `Synchronized profile feed: @${username}`);
         await fetchAnalyticsData();
       } else {
-        showNotification('error', 'Error binding account verification.');
+        const errObj = await response.json().catch(() => ({}));
+        showNotification('error', errObj.error || 'Error binding account verification.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showNotification('error', 'Failed to connect account.');
+      showNotification('error', err.message || 'Failed to connect account.');
     }
   };
 
@@ -165,11 +166,12 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
         showNotification('success', data.message);
         await fetchAnalyticsData();
       } else {
-        showNotification('error', 'Failed to sync API channels.');
+        const errObj = await response.json().catch(() => ({}));
+        showNotification('error', errObj.error || 'Failed to sync API channels.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showNotification('error', 'Sync request failed.');
+      showNotification('error', err.message || 'Sync request failed.');
     } finally {
       setSyncingId(null);
     }

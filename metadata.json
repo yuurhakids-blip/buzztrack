@@ -1,6 +1,6 @@
 {
   "name": "Buzzer Tracker",
-  "description": "A comprehensive tracking and analysis tool for multi-platform social media buzzers, coordinated campaigns, and suspicious accounts, powered by Gemini.",
+  "description": "A comprehensive tracking and analysis tool for multi-platform social media buzzers, coordinated siber campaigns, and suspicious accounts powered by advanced deterministic analysis.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -90,7 +90,8 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to run keyword scan');
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || 'Terjadi kesalahan saat memproses rute pemindaian.');
       }
 
       setCurrentKeyword(searchKeywordInput);
@@ -100,9 +101,9 @@ export default function App() {
       await fetchData();
       
       showNotification('success', `Berhasil mendeteksi jaringan buzzer untuk kata kunci: "${searchKeywordInput}"`);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showNotification('error', 'Gagal memindai kata kunci. Silakan coba lagi.');
+      showNotification('error', err.message || 'Gagal memindai kata kunci. Silakan coba lagi.');
     } finally {
       setIsSearchingKeyword(false);
     }
@@ -414,7 +415,7 @@ export default function App() {
             className={`pb-1 transition-all ${activeTab === 'analyzer' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
             id="nav-analyzer"
           >
-            Gemini Analyzer
+            Threat Analyzer
           </button>
           <button 
             onClick={() => setActiveTab('reporter')}
@@ -582,7 +583,7 @@ export default function App() {
               <strong className="block mb-1 font-bold text-xs flex items-center gap-1.5">
                 <ShieldAlert className="w-3.5 h-3.5" /> DEEP COGNITION ALERT
               </strong>
-              Spike in coordinated copypasta across 3 regional campaigns detected today. Synchronize threat maps utilizing the Gemini intelligence model analysis tab.
+              Spike in coordinated copypasta across 3 regional campaigns detected today. Synchronize threat maps utilizing the siber threat engine analysis tab.
             </div>
           </div>
         </aside>
@@ -594,7 +595,7 @@ export default function App() {
             { id: 'accounts', label: 'Suspicious Accounts' },
             { id: 'graph', label: 'Correlation Graph' },
             { id: 'analytics', label: 'Social Analytics' },
-            { id: 'analyzer', label: 'Gemini Scan' },
+            { id: 'analyzer', label: 'Threat Scan' },
             { id: 'reporter', label: 'Report Incident' },
           ].map((tab) => (
             <button
@@ -711,7 +712,7 @@ export default function App() {
                             onClick={() => {
                               setAnalyzeContent(`Campaign investigation payload for ${selectedCampaign.title}: ${selectedCampaign.description}. Key Narratives: ${selectedCampaign.keyNarrative}. Focused hashtags: ${selectedCampaign.hashtags.join(', ')}.`);
                               setActiveTab('analyzer');
-                              showNotification('success', 'Campaign context copied into Gemini Analyzer matrix!');
+                              showNotification('success', 'Campaign context copied into Threat Analyzer matrix!');
                             }}
                             className="bg-amber-500/10 hover:bg-amber-500/20 text-[#D4AF37] font-semibold border border-amber-500/20 hover:border-[#D4AF37]/50 text-[11px] font-mono px-2.5 py-1 rounded transition duration-200"
                             id="btn-scan-campaign"
@@ -942,7 +943,7 @@ export default function App() {
                               setAnalyzeContent(`Suspected buzzer account footprint details:\nUsername: @${selectedAccount.username}\nPlatform: ${selectedAccount.platform}\nIndicators: ${selectedAccount.reason}. Followers: ${selectedAccount.followers}. Frequency counter: ${selectedAccount.recentCopypastaCount} boilerplate comments logged.`);
                               setAnalyzePlatform(selectedAccount.platform);
                               setActiveTab('analyzer');
-                              showNotification('success', `Entity details loaded for Gemini analysis scanning!`);
+                              showNotification('success', `Entity details loaded for Threat analysis scanning!`);
                             }}
                             className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-[11px] font-mono px-2.5 py-1 rounded transition duration-200"
                             id="btn-scan-account"
@@ -1084,7 +1085,7 @@ export default function App() {
               <div>
                 <h2 className="text-xl lg:text-2xl font-serif text-[#F5F5F5] font-semibold flex items-center gap-2">
                   <BrainCircuit className="w-5 h-5 text-[#D4AF37]" />
-                  Radar Detektif AI (Powered by Gemini)
+                  Radar Detektif AI (Heuristic Threat Engine)
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   Tempelkan teks postingan, tautan promosi, atau biografi akun sosial media untuk membedah pola inautentik dan koordinasi buzzer.
@@ -1188,7 +1189,7 @@ export default function App() {
                       </div>
                       <div className="text-center">
                         <p className="text-sm font-mono font-bold text-amber-500">Menganalisis Sidik Jari Digital...</p>
-                        <p className="text-[11px] text-slate-500 font-mono mt-1">Cross-referencing boilerplate databases via Gemini-3.5-Flash</p>
+                        <p className="text-[11px] text-slate-500 font-mono mt-1 font-semibold">Cross-referencing boilerplate databases via local threat patterns</p>
                       </div>
                     </div>
                   ) : analysisResult ? (
