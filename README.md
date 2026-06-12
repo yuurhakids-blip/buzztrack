@@ -1,9 +1,5 @@
 # BuzzTrack - Pemindai Disinformasi Multi-Platform
 
-<div align="center">
-  <img src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" alt="BuzzTrack Banner" width="800" />
-</div>
-
 ## 📋 Tentang Proyek
 
 BuzzTrack (juga dikenal sebagai EchoWatch) adalah aplikasi web full-stack untuk mendeteksi, memantau, dan menganalisis jaringan buzzer, akun terkoordinasi, dan kampanye disinformasi di platform media sosial utama seperti Twitter/X, YouTube, dan TikTok.
