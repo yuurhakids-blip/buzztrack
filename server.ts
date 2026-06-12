@@ -193,6 +193,23 @@ async function runPythonScraper(platform: string, keyword: string, limit: number
   }
 }
 
+async function runPythonTrendingScraper(platform: string, limit: number = 10): Promise<any> {
+  try {
+    const { stdout } = await execFileAsync("python", [
+      "scrapers/run_scraper.py",
+      platform,
+      "--trending",
+      "--limit", String(limit),
+    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, PYTHONUNBUFFERED: "1" } });
+    return JSON.parse(stdout);
+  } catch (e: any) {
+    if (e.stdout) {
+      try { return JSON.parse(e.stdout); } catch { /* ignore */ }
+    }
+    return { success: false, platform, error: e.message || String(e) };
+  }
+}
+
 function mapScraperResults(results: any[], keyword: string) {
   const id = Date.now().toString();
   const allPosts: any[] = [];
@@ -824,6 +841,58 @@ app.post("/api/social/search", async (req, res) => {
   });
 });
 
+app.post("/api/social/scrape-trending", async (req, res) => {
+  // Try real Python scrapers first (skip if DISABLE_PYTHON_SCRAPERS=true, or if required credentials are missing)
+  let twitter = { success: false, platform: 'X', error: 'disabled' };
+  let youtube = { success: false, platform: 'YouTube', error: 'disabled' };
+  let tiktok = { success: false, platform: 'TikTok', error: 'disabled' };
+  const twitterConfigured = !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token"));
+  const youtubeConfigured = true; // YouTube doesn't need API key for trending search
+  const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN);
+
+  if (!process.env.DISABLE_PYTHON_SCRAPERS) {
+    const scraperPromises: Promise<any>[] = [];
+    if (twitterConfigured) scraperPromises.push(runPythonTrendingScraper("twitter", 50));
+    if (youtubeConfigured) scraperPromises.push(runPythonTrendingScraper("youtube", 50));
+    if (tiktokConfigured) scraperPromises.push(runPythonTrendingScraper("tiktok", 50));
+    if (scraperPromises.length === 0) {
+      console.log("No scrapers configured — check .env for credentials");
+    } else {
+      const results = await Promise.all(scraperPromises);
+      results.forEach(r => {
+        if (r.platform === 'X') twitter = r;
+        else if (r.platform === 'YouTube') youtube = r;
+        else if (r.platform === 'TikTok') tiktok = r;
+      });
+    }
+  } else {
+    console.log("Python scrapers disabled via DISABLE_PYTHON_SCRAPERS env var");
+  }
+
+  const succeeded = [twitter, youtube, tiktok].filter(r => r.success === true);
+  const hasRealData = succeeded.some(r => r.results && r.results.length > 0);
+  const keyword = "Trending Today";
+
+  if (succeeded.length > 0 && hasRealData) {
+    mapScraperResults(succeeded, keyword);
+    await computeBuzzerScores();
+  } else {
+    if (succeeded.length > 0 && !hasRealData) {
+      console.warn("Scrapers connected but returned 0 results, using synthetic data");
+    } else {
+      console.warn("All Python scrapers failed, using synthetic data:", { twitter: twitter.error, youtube: youtube.error, tiktok: tiktok.error });
+    }
+    generateKeywordData(keyword);
+  }
+  res.json({
+    success: true,
+    method: scrapedAccounts.length > 0 ? (hasRealData ? "python" : "synthetic") : "synthetic",
+    keyword,
+    campaigns: scrapedCampaigns,
+    accounts: scrapedAccounts,
+  });
+});
+
 app.get("/api/network", (_req, res) => {
   const platformSet = new Set<string>();
   scrapedCampaigns.forEach(c => c.platforms?.forEach((p: string) => platformSet.add(p)));
@@ -978,15 +1047,21 @@ app.get("/api/trend", async (_req, res) => {
 
 app.get("/api/trend/daily", async (_req, res) => {
   const today = new Date().toISOString().slice(0, 10);
-  const todayPosts = scrapedPosts.filter((p: any) =>
-    p.publishedAt?.startsWith(today)
-  );
+  const fourteenDaysAgo = new Date();
+  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+  
+  // Ambil postingan 14 hari terakhir (tidak hanya hari ini)
+  const relevantPosts = scrapedPosts.filter((p: any) => {
+    if (!p.publishedAt) return true; // Jika tidak ada tanggal, tetap masukkan
+    const postDate = new Date(p.publishedAt);
+    return postDate >= fourteenDaysAgo;
+  });
 
   const platforms: Record<string, any> = {};
   const platformKeys = ['X', 'YouTube', 'TikTok'];
 
   platformKeys.forEach(pl => {
-    const plPosts = todayPosts.filter((p: any) => p.platform === pl);
+    const plPosts = relevantPosts.filter((p: any) => p.platform === pl);
     const hashtags = plPosts.flatMap((p: any) => {
       const tags = (p.text || '').match(/#\w+/g) || [];
       return tags;
@@ -1006,7 +1081,7 @@ app.get("/api/trend/daily", async (_req, res) => {
 
   const sortedPlatforms = Object.entries(platforms).sort((a, b) => b[1].postCount - a[1].postCount);
   const dominantPlatform = sortedPlatforms.length > 0 ? sortedPlatforms[0][0] : 'N/A';
-  const totalPosts = todayPosts.length;
+  const totalPosts = relevantPosts.length;
 
   res.json({
     date: today,
@@ -1014,7 +1089,7 @@ app.get("/api/trend/daily", async (_req, res) => {
     platforms,
     totalPosts,
     dominantPlatform,
-    overallSentiment: totalPosts > 0 ? (todayPosts.filter((p: any) => (p.text || '').toLowerCase().includes('boikot')).length > todayPosts.length / 3 ? 'Negative' : 'Mixed') : 'N/A'
+    overallSentiment: totalPosts > 0 ? (relevantPosts.filter((p: any) => (p.text || '').toLowerCase().includes('boikot')).length > relevantPosts.length / 3 ? 'Negative' : 'Mixed') : 'N/A'
   });
 });
 

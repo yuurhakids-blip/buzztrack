@@ -24,6 +24,36 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
   const [clusteringMode, setClusteringMode] = useState<'AI' | 'Heuristic' | null>(null);
   const nodeRef = React.useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    const container = nodeRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomSensitivity = 0.001;
+      let newZoom = zoom - e.deltaY * zoomSensitivity;
+      newZoom = Math.max(0.3, Math.min(3, newZoom));
+      
+      if (newZoom !== zoom) {
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const contentX = (mouseX - pan.x) / zoom;
+        const contentY = (mouseY - pan.y) / zoom;
+        
+        const newPanX = mouseX - contentX * newZoom;
+        const newPanY = mouseY - contentY * newZoom;
+        
+        setZoom(newZoom);
+        setPan({ x: newPanX, y: newPanY });
+      }
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [zoom, pan]);
+
   const runClustering = async () => {
     if (nodes.length === 0) return;
     setIsClustering(true);
@@ -354,7 +384,7 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
         >
           <div
             style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center center' }}
-            className="transition-transform duration-200 flex items-center justify-center"
+            className="flex items-center justify-center"
           >
           <svg
             viewBox={`0 0 ${width} ${height}`}

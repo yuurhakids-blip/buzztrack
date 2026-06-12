@@ -1,5 +1,5 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { Campaign, SuspiciousAccount, Platform, AnalysisResponse, NetworkNode, NetworkLink, SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from './domain/entities';
+import { Campaign, SuspiciousAccount, Platform, AnalysisResponse, NetworkNode, NetworkLink, SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from './core/domain/entities';
 import { api } from './api';
 import { AIService } from './infrastructure/services/AIService';
 import { Settings as SettingsIcon, ShieldAlert, Search, Radio, Hash, UserX, BrainCircuit, AlertTriangle, PlusCircle, ExternalLink, Send, Users, LineChart, CornerDownRight, TrendingUp, CalendarDays, X as CloseIcon, CheckCircle, Clock, Fingerprint, Cpu, RefreshCw } from 'lucide-react';
@@ -24,27 +24,64 @@ export default function App() {
     }
   }, [activeTab]);
 
-  const fetchTrendData = async () => {
+  const fetchTrendData = async (autoScrape: boolean = true) => {
     setIsTrendLoading(true);
     try {
-      const resp = await fetch('/api/trend/daily');
-      const data = await resp.json();
-      setTrendData(data);
+      // Cek apakah sudah ada data
+      const trendResp = await fetch('/api/trend/daily');
+      let trendData = await trendResp.json();
+      
+      // Jika tidak ada data dan autoScrape aktif, lakukan scraping trending otomatis
+      if (autoScrape && (!trendData || trendData.totalPosts === 0)) {
+        // Lakukan scraping trending otomatis
+        const searchResp = await fetch('/api/social/scrape-trending', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (searchResp.ok) {
+          const searchResult = await searchResp.json();
+          setCampaigns(searchResult.campaigns || []);
+          setAccounts(searchResult.accounts || []);
+          // Ambil data tren lagi setelah pencarian
+          const newTrendResp = await fetch('/api/trend/daily');
+          trendData = await newTrendResp.json();
+        }
+      }
+      
+      setTrendData(trendData);
       setIsTrendLoading(false);
       
-      // AI insight terpisah agar tidak hambat render data
-      const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
-      const config = {
-        provider,
-        model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
-        apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+      // Fungsi heuristic fallback
+      const generateHeuristicInsight = (data: any) => {
+        if (!data) return "Belum ada data tren yang cukup untuk analisis.";
+        const { platforms, totalPosts, dominantPlatform, overallSentiment } = data;
+        const platformNames = Object.keys(platforms || {}).join(', ');
+        return `Hari ini terpantau ${totalPosts || 0} postingan di ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
       };
 
-      AIService.analyzeTrend(data, config).then(aiResult => {
-        setTrendInsight(aiResult);
-      }).catch(err => {
-        console.error("Trend AI insight gagal:", err);
-      });
+      // Coba AI terlebih dahulu, jika gagal fallback ke heuristic
+      try {
+        const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
+        const config = {
+          provider,
+          model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+          apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+        };
+
+        if (config.apiKey) {
+          // Coba dapatkan insight dari AI
+          const aiResult = await AIService.analyzeTrend(trendData, config);
+          setTrendInsight(aiResult);
+        } else {
+          // Tidak ada API key, langsung heuristic
+          setTrendInsight({ insight: generateHeuristicInsight(trendData), mode: 'Heuristic' });
+        }
+      } catch (aiError) {
+        // AI gagal (token habis atau error), fallback ke heuristic
+        console.warn("AI failed, using heuristic:", aiError);
+        setTrendInsight({ insight: generateHeuristicInsight(trendData), mode: 'Heuristic' });
+      }
     } catch (err) {
       console.error("Trend data fetch failed:", err);
       setIsTrendLoading(false);
@@ -85,8 +122,8 @@ export default function App() {
         apiKey: localStorage.getItem(`api-key-${provider}`) || ''
       };
       
-      // Cek localStorage cache dulu
-      const cacheKey = `brief_${selectedCampaign.id}`;
+      // Cek localStorage cache dulu dengan suffix v2 untuk invalidate cache lama
+      const cacheKey = `brief_${selectedCampaign.id}_v2`;
       try {
         const cached = localStorage.getItem(cacheKey);
         if (cached) {
@@ -112,7 +149,7 @@ Postingan: ${selectedCampaign.buzzerCount || 0}
 Tagar: ${(selectedCampaign.hashtags || []).join(', ')}
 Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
             
-            const resp = await AIService.generateEvidence([{ text: prompt }], config);
+            const resp = await AIService.generateEvidence([{ text: prompt }], config, selectedCampaign.id);
             const text = `[MODE ${resp.mode}] ${resp.summary}`;
             localStorage.setItem(cacheKey, JSON.stringify({ text, mode: resp.mode, timestamp: Date.now() }));
             setCampaignBrief(text);
