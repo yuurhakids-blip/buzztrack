@@ -609,10 +609,6 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               <span className="text-[8px] sm:text-[9px] font-mono border border-amber-500/30 text-[#D4AF37] font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest bg-amber-500/5">
                 v2.7
               </span>
-              <span className={`text-[8px] sm:text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest flex items-center gap-1 ${aiActive ? 'border border-emerald-500/30 text-emerald-400 bg-emerald-500/5' : 'border border-slate-700 text-slate-500 bg-slate-800/30'}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${aiActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-                {aiActive ? `AI ${activeProvider}` : 'AI Offline'}
-              </span>
             </div>
             <p className="text-[9px] sm:text-[10px] text-[#A0A0A5] font-mono tracking-wider uppercase">Pemindai Disinformasi</p>
           </div>
@@ -1955,6 +1951,16 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
           <span>KOGNISI AKTIF: DARING</span>
         </div>
       </footer>
+
+      {/* Fixed AI Status Indicator at Bottom Right */}
+      <div className="fixed bottom-4 right-4 z-50">
+        <div className={`px-4 py-2 rounded-xl shadow-lg border transition-all duration-300 flex items-center gap-2 ${aiActive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-slate-900 border-slate-700 text-slate-400'}`}>
+          <span className={`w-2.5 h-2.5 rounded-full ${aiActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`}></span>
+          <span className="text-[11px] font-mono font-bold uppercase tracking-wider">
+            {aiActive ? `AI ${activeProvider} Aktif` : 'AI Offline'}
+          </span>
+        </div>
+      </div>
 
     </div>
   );

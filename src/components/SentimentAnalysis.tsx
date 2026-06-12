@@ -81,7 +81,7 @@ const generateMockPosts = (topic: string): PostData[] => {
     `Saya tidak yakin tentang ${topic}`
   ];
 
-  const platforms = ['X', 'TikTok', 'YouTube', 'Instagram'];
+  const platforms = ['X', 'TikTok', 'YouTube'];
   const authors = ['@anakmuda', '@pemikirbebas', '@pengamatpolitik', '@teknologikita', '@warganet_2024', '@cerita_harian', '@analis_sosial', '@trending_id', '@berita_terkini', '@publik_voice'];
 
   return basePosts.map((text, idx) => {
@@ -178,7 +178,7 @@ export default function SentimentAnalysis({
   };
 
   const getPlatformStats = () => {
-    const platforms = ['X', 'TikTok', 'YouTube', 'Instagram'];
+    const platforms = ['X', 'TikTok', 'YouTube'];
     return platforms.map(p => {
       const pPosts = posts.filter(post => post.platform === p);
       const avgSentiment = pPosts.length > 0 
@@ -269,16 +269,15 @@ export default function SentimentAnalysis({
               Filter Platform
             </label>
             <select
-              value={selectedPlatform}
-              onChange={(e) => setSelectedPlatform(e.target.value)}
-              className="w-full bg-[#0F0F12] border border-[#2A2A2E] rounded-xl px-4 py-4 text-sm text-slate-200 focus:outline-none focus:border-[#D4AF37]/50 transition"
-            >
-              <option value="All">Semua Platform</option>
-              <option value="X">X</option>
-              <option value="TikTok">TikTok</option>
-              <option value="YouTube">YouTube</option>
-              <option value="Instagram">Instagram</option>
-            </select>
+                        value={selectedPlatform}
+                        onChange={(e) => setSelectedPlatform(e.target.value)}
+                        className="w-full bg-[#0F0F12] border border-[#2A2A2E] rounded-xl px-4 py-4 text-sm text-slate-200 focus:outline-none focus:border-[#D4AF37]/50 transition"
+                      >
+                        <option value="All">Semua Platform</option>
+                        <option value="X">X</option>
+                        <option value="TikTok">TikTok</option>
+                        <option value="YouTube">YouTube</option>
+                      </select>
           </div>
           <div className="flex flex-col justify-end">
             <button
