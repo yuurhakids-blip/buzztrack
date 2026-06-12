@@ -28,8 +28,7 @@ def main():
 
     if platform == "twitter":
         from twitter_scraper import search  # type: ignore
-        import asyncio
-        asyncio.run(search(keyword, limit))
+        search(keyword, limit)
     elif platform == "youtube":
         from youtube_scraper import search  # type: ignore
         search(keyword, limit)

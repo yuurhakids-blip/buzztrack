@@ -1,37 +1,60 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  ShieldAlert, 
-  Search, 
-  Radio, 
-  Hash, 
-  UserX, 
-  BrainCircuit, 
-  AlertTriangle, 
-  PlusCircle, 
-  ExternalLink, 
-  Send, 
-  Users, 
-  LineChart, 
-  CornerDownRight, 
-  TrendingUp,
-  CalendarDays,
-  X as CloseIcon,
-  CheckCircle,
-  Clock,
-  Fingerprint,
-  Cpu,
-  RefreshCw
-} from 'lucide-react';
-import { Campaign, SuspiciousAccount, Platform, AnalysisResponse } from './types';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
+import { Campaign, SuspiciousAccount, Platform, AnalysisResponse, NetworkNode, NetworkLink, SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from './domain/entities';
 import { api } from './api';
-import NetworkGraph from './components/NetworkGraph';
-import SocialAnalyticsDashboard from './components/SocialAnalyticsDashboard';
+import { AIService } from './infrastructure/services/AIService';
+import { Settings as SettingsIcon, ShieldAlert, Search, Radio, Hash, UserX, BrainCircuit, AlertTriangle, PlusCircle, ExternalLink, Send, Users, LineChart, CornerDownRight, TrendingUp, CalendarDays, X as CloseIcon, CheckCircle, Clock, Fingerprint, Cpu, RefreshCw } from 'lucide-react';
+const NetworkGraph = lazy(() => import('./components/NetworkGraph'));
+const SocialAnalyticsDashboard = lazy(() => import('./components/SocialAnalyticsDashboard'));
+const Settings = lazy(() => import('./settings/Settings'));
+import DatePickerModal from './components/DatePickerModal';
+import events from 'events';
+events.defaultMaxListeners = 100;
+
+const TrendDashboard = lazy(() => import('./components/TrendDashboard'));
 
 export default function App() {
-  // Navigation Tabs
-  const [activeTab, setActiveTab] = useState<'campaigns' | 'accounts' | 'graph' | 'analyzer' | 'reporter' | 'analytics'>('campaigns');
-  
-  // Data State
+  const [activeTab, setActiveTab] = useState<'campaigns' | 'accounts' | 'graph' | 'analyzer' | 'reporter' | 'analytics' | 'settings' | 'tren'>('campaigns');
+  const [trendData, setTrendData] = useState<any>(null);
+  const [trendInsight, setTrendInsight] = useState<{ insight: string, mode: 'AI' | 'Heuristic' | null }>({ insight: '', mode: null });
+  const [isTrendLoading, setIsTrendLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'tren' && !trendData) {
+      fetchTrendData();
+    }
+  }, [activeTab]);
+
+  const fetchTrendData = async () => {
+    setIsTrendLoading(true);
+    try {
+      const resp = await fetch('/api/trend/daily');
+      const data = await resp.json();
+      setTrendData(data);
+      setIsTrendLoading(false);
+      
+      // AI insight terpisah agar tidak hambat render data
+      const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
+      const config = {
+        provider,
+        model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+        apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+      };
+
+      AIService.analyzeTrend(data, config).then(aiResult => {
+        setTrendInsight(aiResult);
+      }).catch(err => {
+        console.error("Trend AI insight gagal:", err);
+      });
+    } catch (err) {
+      console.error("Trend data fetch failed:", err);
+      setIsTrendLoading(false);
+    }
+  };
+  // ... rest of state
+  const [platformFilter, setPlatformFilter] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [accounts, setAccounts] = useState<SuspiciousAccount[]>([]);
   const [stats, setStats] = useState({
@@ -42,12 +65,80 @@ export default function App() {
     avgBotScore: 0,
     recentReportsCount: 0
   });
-
-  // Controls State
-  const [platformFilter, setPlatformFilter] = useState<string>('All');
-  const [searchQuery, setSearchQuery] = useState('');
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
   const [selectedAccount, setSelectedAccount] = useState<SuspiciousAccount | null>(null);
+  const [campaignBrief, setCampaignBrief] = useState<string | null>(null);
+  const [accountBrief, setAccountBrief] = useState<string | null>(null);
+  const [accountPosts, setAccountPosts] = useState<any[]>([]);
+
+  const [campaignAIMode, setCampaignAIMode] = useState<'AI' | 'Heuristic' | null>(null);
+
+  useEffect(() => {
+    if (selectedCampaign?.id) {
+      setCampaignBrief(null);
+      setCampaignAIMode(null);
+      
+      const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
+      const config = {
+        provider,
+        model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+        apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+      };
+      
+      // Cek localStorage cache dulu
+      const cacheKey = `brief_${selectedCampaign.id}`;
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const { text, mode, timestamp } = JSON.parse(cached);
+          if (Date.now() - timestamp < 300000) {
+            setCampaignBrief(text);
+            setCampaignAIMode(mode);
+            return;
+          }
+        }
+      } catch {}
+      
+      const generateBrief = async () => {
+        try {
+          if (config.apiKey) {
+            const prompt = `Buat ringkasan intelijen singkat (2-3 kalimat Bahasa Indonesia) untuk kampanye disinformasi ini:
+Judul: ${selectedCampaign.title}
+Platform: ${selectedCampaign.platforms?.join(', ')}
+Topik: ${selectedCampaign.topic}
+Intensitas: ${selectedCampaign.intensity}
+Rasio Bot: ${Math.round((selectedCampaign.botRatio || 0) * 100)}%
+Postingan: ${selectedCampaign.buzzerCount || 0}
+Tagar: ${(selectedCampaign.hashtags || []).join(', ')}
+Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
+            
+            const resp = await AIService.generateEvidence([{ text: prompt }], config);
+            const text = `[MODE ${resp.mode}] ${resp.summary}`;
+            localStorage.setItem(cacheKey, JSON.stringify({ text, mode: resp.mode, timestamp: Date.now() }));
+            setCampaignBrief(text);
+            setCampaignAIMode(resp.mode);
+          } else {
+            const text = `[MODE HEURISTIK] Kampanye "${selectedCampaign.title}" terdeteksi di ${selectedCampaign.platforms?.[0] || 'multi-platform'} dengan intensitas ${selectedCampaign.intensity}. ${Math.round((selectedCampaign.botRatio || 0) * 100)}% aktivitas terindikasi dari akun buzzer terkoordinasi.`;
+            setCampaignBrief(text);
+            setCampaignAIMode('Heuristic');
+          }
+        } catch {
+          setCampaignBrief(`[MODE HEURISTIK] Analisis AI gagal. Data kampanye menunjukkan ${selectedCampaign.buzzerCount} agen terpantau.`);
+          setCampaignAIMode('Heuristic');
+        }
+      };
+      generateBrief();
+    }
+  }, [selectedCampaign?.id]);
+
+  useEffect(() => {
+    if (selectedAccount?.id) {
+      setAccountBrief(null);
+      setAccountPosts([]);
+      fetch(`/api/account/${selectedAccount.id}/brief`).then(r => r.json()).then(d => setAccountBrief(d.brief)).catch(() => {});
+      fetch(`/api/account/${selectedAccount.id}/posts`).then(r => r.json()).then(d => setAccountPosts(d)).catch(() => {});
+    }
+  }, [selectedAccount?.id]);
 
   // Gemini Analyzer Form State
   const [analyzeType, setAnalyzeType] = useState<'profile' | 'copypasta' | 'campaign'>('copypasta');
@@ -68,6 +159,47 @@ export default function App() {
   // General Notification Alert
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const [activeProvider, setActiveProvider] = useState<string>('Gemini');
+  const [aiActive, setAiActive] = useState<boolean>(false);
+  const [todayTrend, setTodayTrend] = useState<any[]>([]);
+
+  const [activeModel, setActiveModel] = useState<string>('');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('selectedProvider') || 'Gemini';
+    const savedModel = localStorage.getItem('selectedModel') || '';
+    setActiveProvider(saved);
+    setActiveModel(savedModel);
+    const key = localStorage.getItem(`api-key-${saved}`);
+    setAiActive(!!key);
+  }, []);
+
+  useEffect(() => {
+    const fetchTodayTrend = async () => {
+      try {
+        const resp = await fetch('/api/trend');
+        const data = await resp.json();
+        setTodayTrend(data);
+      } catch {}
+    };
+    fetchTodayTrend();
+
+    fetchData();
+    const statsInterval = setInterval(fetchData, 10000);
+
+    // Deep Cognition Alert dinonaktifkan (statik & tanpa notifikasi otomatis)
+    // const alertInterval = setInterval(async () => {
+    //   const mockCritical = true; 
+    //   if (mockCritical) {
+    //     showNotification('success', 'Peringatan Deteksi Ancaman Kritis!');
+    //   }
+    // }, 10000); 
+
+    return () => {
+      clearInterval(statsInterval);
+    };
+  }, []);
+
   // Keyword OSINT Search State
   const [searchKeywordInput, setSearchKeywordInput] = useState('');
   const [isSearchingKeyword, setIsSearchingKeyword] = useState(false);
@@ -78,8 +210,7 @@ export default function App() {
     end: '',
   });
 
-  const handleKeywordSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleKeywordSearch = async (_e?: any) => {
     if (!searchKeywordInput.trim()) {
       showNotification('error', 'Silakan masukkan kata kunci penyelidikan terlebih dahulu.');
       return;
@@ -87,13 +218,22 @@ export default function App() {
 
     setIsSearchingKeyword(true);
     try {
-      await api.social.search(searchKeywordInput);
-
+      const result = await api.social.search(searchKeywordInput);
       setCurrentKeyword(searchKeywordInput);
+
+      if (result.campaigns && result.campaigns.length > 0) {
+        setCampaigns(result.campaigns);
+        setAccounts(result.accounts || []);
+        setSelectedCampaign(result.campaigns[0]);
+        if (result.accounts && result.accounts.length > 0) {
+          setSelectedAccount(result.accounts[0]);
+        }
+      } else if (result.method !== 'reset') {
+        await fetchData();
+      }
+
       setReloadTrigger(prev => prev + 1);
-      
-      await fetchData();
-      
+      setActiveTab('campaigns');
       showNotification('success', `Berhasil mendeteksi jaringan buzzer untuk kata kunci: "${searchKeywordInput}"`);
     } catch (err: any) {
       console.error(err);
@@ -119,31 +259,101 @@ export default function App() {
     }
   };
 
+  const [isCollectingEvidence, setIsCollectingEvidence] = useState(false);
+  const handleCollectEvidence = async (account: SuspiciousAccount) => {
+    setIsCollectingEvidence(true);
+    try {
+      const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
+      const config = {
+        provider,
+        model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+        apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+      };
+      
+      const result = await AIService.generateEvidence(accountPosts, config);
+      const briefText = result.mode === 'AI' 
+        ? `[MODE AI] ${result.summary}`
+        : `[MODE HEURISTIK] Data postingan tidak cukup untuk AI. Akun menunjukkan pola: ${account.reason || 'Tidak ada info'}`;
+      
+      setAccountBrief(briefText);
+      setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, aiEvidenceSummary: briefText } : a));
+    } catch (err) {
+      console.error("Evidence collection failed:", err);
+    } finally {
+      setIsCollectingEvidence(false);
+    }
+  };
+
+  const [isPredicting, setIsPredicting] = useState(false);
+  const handlePredictRisk = async (campaign: Campaign) => {
+    setIsPredicting(true);
+    try {
+      const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
+      const config = {
+        provider,
+        model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+        apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+      };
+      
+      const result = await AIService.predictRisk(campaign, todayTrend, config);
+      const insightText = `[MODE ${result.mode}] ${result.insight}`;
+      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { 
+        ...c, 
+        predictedRiskTrend: result.trend as any,
+        aiInsight: insightText,
+        riskTrendMode: result.mode
+      } : c));
+      showNotification('success', `Analisis prediksi selesai. Mode: ${result.mode}`);
+    } catch (err) {
+      console.error("Prediction failed:", err);
+    } finally {
+      setIsPredicting(false);
+    }
+  };
+
   // Load backend data on mount
   useEffect(() => {
-    fetchData();
-  }, []);
+    const handler = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
 
   const fetchData = async () => {
     try {
-      const [cData, aData, sData] = await Promise.all([
-        api.campaigns.list(),
-        api.accounts.list(),
+      const [cResponse, aResponse, sData] = await Promise.all([
+        api.campaigns.list(1, 20),
+        api.accounts.list(1, 20),
         api.stats.get()
       ]);
-      setCampaigns(cData);
-      setAccounts(aData);
-      setStats(sData);
+      console.log('fetchData results:', { campaigns: cResponse.data?.length, accounts: aResponse.data?.length });
+      
+      if (cResponse.data?.length > 0) {
+        setCampaigns(cResponse.data);
+        setAccounts(aResponse.data);
+        setStats(sData);
+        
+        // Hanya set default jika belum ada yang dipilih (cegah "reload" view)
+        setSelectedCampaign(prev => {
+          if (prev) {
+            const stillExists = cResponse.data.find((c: any) => c.id === prev.id);
+            return stillExists || cResponse.data[0];
+          }
+          return cResponse.data[0];
+        });
 
-      if (cData.length > 0 && !selectedCampaign) {
-        setSelectedCampaign(cData[0]);
-      }
-      if (aData.length > 0 && !selectedAccount) {
-        setSelectedAccount(aData[0]);
+        setSelectedAccount(prev => {
+          if (prev) {
+            const stillExists = aResponse.data.find((a: any) => a.id === prev.id);
+            return stillExists || aResponse.data[0];
+          }
+          return aResponse.data[0];
+        });
+      } else {
+        // ... rest of logic
       }
     } catch (error) {
-      console.error("Error loading intelligence data:", error);
-      showNotification('error', 'Failed to synchronize with central threat matrix feed.');
+      // ... error handling
     }
   };
 
@@ -213,10 +423,27 @@ export default function App() {
   };
 
   // Handle active Gemini scan submission
+  const analyzeSamples: Record<string, string> = {
+    copypasta: 'Saya warga negara Indonesia yg cinta NKRI harga mati!\n' +
+      'Bangsa ini harus dijaga dari penghianat!\n' +
+      'Kami tidak akan pernah mundur, NKRI harga mati!\n' +
+      'Ayo lawan mereka yg ingin menghancurkan Indonesia!\n' +
+      '#NKRIhargaMatiamin\n' +
+      'Jangan pernah percaya pada berita bohong!\n' +
+      'Kita harus bersatu padu menjaga keutuhan bangsa!',
+    profile: 'Username: @budi_nasionalis\nBio: NKRI Harga Mati | Menolak Lupa | Pendukung penuh pemerintah | #SaveNegara\nFollowers: 12\nFollowing: 1950\nJoin: March 2024\nVerified: No',
+    campaign: 'Narasi: serangan terhadap pemerintah melalui tagar #PemerintahGagal, #RakyatSengsara. Akun-akun baru (usia < 3 bulan) membanjiri komentar dengan narasi seragam. Pola posting: 50+ tweet per jam per akun. Semua menyertakan link ke situs berita yang tidak jelas sumbernya.',
+  };
+
+  const fillSampleData = (type: string) => {
+    setAnalyzeType(type as any);
+    setAnalyzeContent(analyzeSamples[type] || '');
+  };
+
   const handleRunAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!analyzeContent.trim()) {
-      showNotification('error', 'Please enter some text, links, or username profiles to analyze.');
+      showNotification('error', 'Masukkan teks, tautan, atau profil untuk dianalisis.');
       return;
     }
 
@@ -224,17 +451,20 @@ export default function App() {
     setAnalysisResult(null);
 
     try {
-      const data = await api.analyze({
-        type: analyzeType,
-        content: analyzeContent,
-        platform: analyzePlatform
-      });
+      const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
+      const config = {
+        provider,
+        model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+        apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+      };
+
+      const data = await AIService.analyze(analyzeContent, config);
       setAnalysisResult(data);
-      showNotification('success', `Analysis completed with verdict: ${data.verdict}`);
+      showNotification('success', `Analisis selesai: ${data.verdict}`);
       fetchData();
     } catch (err: any) {
       console.error(err);
-      showNotification('error', err.message || 'Connection timed out during heavy intelligence query.');
+      showNotification('error', 'Gagal memanggil AI. Periksa API Key di Pengaturan.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -244,7 +474,7 @@ export default function App() {
   const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reportUrl || !reportNarrative) {
-      showNotification('error', 'Please fill in the reported URL and narrative descriptive keywords.');
+      showNotification('error', 'Isi URL bukti dan deskripsi narasi terlebih dahulu.');
       return;
     }
 
@@ -258,7 +488,7 @@ export default function App() {
         evidence: reportEvidence,
         email: reportEmail
       });
-      showNotification('success', 'Incident vector logged successfully. Synchronization updated live!');
+      showNotification('success', 'Laporan insiden berhasil dikirim!');
       setReportUrl('');
       setReportUsername('');
       setReportNarrative('');
@@ -271,7 +501,7 @@ export default function App() {
         setActiveTab('campaigns');
       }
     } catch (err: any) {
-      showNotification('error', err.message || 'API unavailable during incident propagation.');
+      showNotification('error', err.message || 'API tidak tersedia saat pengiriman laporan.');
     } finally {
       setIsSubmittingReport(false);
     }
@@ -287,8 +517,8 @@ export default function App() {
   };
 
   // Custom styling filters
-  const filteredCampaigns = campaigns.filter(c => {
-    const matchesPlatform = platformFilter === 'All' || c.platforms.includes(platformFilter as Platform);
+  const filteredCampaigns = (campaigns || []).filter(c => {
+    const matchesPlatform = platformFilter === 'All' || (c as any).platforms?.includes(platformFilter as Platform);
     const matchesSearch = searchQuery === '' || 
       c.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
       c.topic.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -337,12 +567,16 @@ export default function App() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl md:text-2xl font-serif italic tracking-tight text-[#F5F5F5] font-semibold">EchoWatch Tracker</h1>
+              <h1 className="text-xl md:text-2xl font-serif italic tracking-tight text-[#F5F5F5] font-semibold">EchoWatch</h1>
               <span className="text-[9px] font-mono border border-amber-500/30 text-[#D4AF37] font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest bg-amber-500/5">
-                v2.6 Live
+                v2.6
+              </span>
+              <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest flex items-center gap-1 ${aiActive ? 'border border-emerald-500/30 text-emerald-400 bg-emerald-500/5' : 'border border-slate-700 text-slate-500 bg-slate-800/30'}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${aiActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                {aiActive ? `AI ${activeProvider} (${activeModel}) Aktif` : 'AI Offline'}
               </span>
             </div>
-            <p className="text-[10px] text-[#A0A0A5] font-mono tracking-wider uppercase">Multi-Platform Disinformation Scanner</p>
+            <p className="text-[10px] text-[#A0A0A5] font-mono tracking-wider uppercase">Pemindai Disinformasi Multi-Platform</p>
           </div>
         </div>
 
@@ -353,50 +587,64 @@ export default function App() {
             className={`pb-1 transition-all ${activeTab === 'campaigns' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
             id="nav-campaigns"
           >
-            Campaign Intel
+            Intel Kampanye
           </button>
           <button 
             onClick={() => setActiveTab('accounts')}
             className={`pb-1 transition-all ${activeTab === 'accounts' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
             id="nav-accounts"
           >
-            Entity Profiling
+            Profil Entitas
           </button>
           <button 
             onClick={() => setActiveTab('graph')}
             className={`pb-1 transition-all ${activeTab === 'graph' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
             id="nav-graph"
           >
-            Network Matrix
+            Matriks Jaringan
           </button>
           <button 
             onClick={() => setActiveTab('analytics')}
             className={`pb-1 transition-all ${activeTab === 'analytics' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
             id="nav-analytics"
           >
-            Social Analytics
+            Analitik Sosial
+          </button>
+          <button 
+            onClick={() => setActiveTab('tren')}
+            className={`pb-1 transition-all ${activeTab === 'tren' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
+            id="nav-trend"
+          >
+            Tren Harian
           </button>
           <button 
             onClick={() => setActiveTab('analyzer')}
             className={`pb-1 transition-all ${activeTab === 'analyzer' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
             id="nav-analyzer"
           >
-            Threat Analyzer
+            Analis Ancaman
           </button>
           <button 
             onClick={() => setActiveTab('reporter')}
             className={`pb-1 transition-all ${activeTab === 'reporter' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
             id="nav-reporter"
           >
-            Log Incident
+            Lapor Insiden
+          </button>
+          <button 
+            onClick={() => setActiveTab('settings')}
+            className={`pb-1 transition-all ${activeTab === 'settings' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
+            id="nav-settings"
+          >
+            Pengaturan
           </button>
         </nav>
 
         {/* Security level badge & user */}
         <div className="flex items-center space-x-4">
           <div className="hidden sm:block text-right">
-            <p className="text-[9px] font-mono text-[#66666E] uppercase tracking-wider">Access Integrity Mode</p>
-            <p className="text-xs font-bold text-[#D4AF37] opacity-90 font-mono">Level 4: Security Admin</p>
+            <p className="text-[9px] font-mono text-[#66666E] uppercase tracking-wider">Mode Akses Integritas</p>
+            <p className="text-xs font-bold text-[#D4AF37] opacity-90 font-mono">Level 4: Admin Keamanan</p>
           </div>
           <div className="w-10 h-10 rounded-full border border-violet-500/20 bg-[#15151A] p-0.5 flex items-center justify-center text-xs font-mono font-bold text-amber-400 bg-gradient-to-tr from-[#1A1A1F] to-[#272730] shadow-inner border border-[#D4AF37]/30">
             H.I
@@ -413,24 +661,24 @@ export default function App() {
           {/* Quick Stats Panel */}
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-[#15151A] border border-[#2A2A2E] p-3 rounded-lg flex flex-col justify-between" id="stat-total-campaigns">
-              <span className="text-[9px] uppercase tracking-wider text-[#66666E] font-semibold">Campaigns</span>
+              <span className="text-[9px] uppercase tracking-wider text-[#66666E] font-semibold">Kampanye</span>
               <div className="flex items-baseline space-x-1.5 mt-1">
                 <span className="text-xl font-serif text-[#D4AF37] font-bold">{stats.totalCampaigns}</span>
                 <span className="text-[10px] text-emerald-400 font-mono">(Active: {stats.activeCampaignsCount})</span>
               </div>
             </div>
             <div className="bg-[#15151A] border border-[#2A2A2E] p-3 rounded-lg flex flex-col justify-between" id="stat-active-buzzers">
-              <span className="text-[9px] uppercase tracking-wider text-[#66666E] font-semibold">Nodes Tracked</span>
+              <span className="text-[9px] uppercase tracking-wider text-[#66666E] font-semibold">Node Terpantau</span>
               <div className="flex items-baseline space-x-1.5 mt-1">
                 <span className="text-xl font-serif text-[#D4AF37] font-bold">{stats.activeBuzzersCount}</span>
-                <span className="text-[10px] text-red-400 font-mono">▲ {stats.avgBotScore}% bot</span>
+                <span className="text-[10px] text-red-400 font-mono">▲ {stats.avgBotScore}% buzzer</span>
               </div>
             </div>
           </div>
 
           <div className="border-t border-[#2A2A2E] pt-5">
             <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#66666E]/90 mb-3 flex items-center gap-1.5 font-bold">
-              <Fingerprint className="w-3.5 h-3.5 text-[#D4AF37]" /> Filter Platforms
+              <Fingerprint className="w-3.5 h-3.5 text-[#D4AF37]" /> Filter Platform
             </h3>
             <div className="grid grid-cols-2 xl:grid-cols-1 gap-2">
               {[
@@ -465,7 +713,7 @@ export default function App() {
           {/* Quick Search */}
           <div className="border-t border-[#2A2A2E] pt-5">
             <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#66666E]/90 mb-3 flex items-center gap-1.5 font-bold">
-              <Search className="w-3.5 h-3.5 text-[#D4AF37]" /> Live Filter Stream
+              <Search className="w-3.5 h-3.5 text-[#D4AF37]" /> Stream Filter Langsung
             </h3>
             <div className="relative">
               <Search className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
@@ -473,7 +721,7 @@ export default function App() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search hashtags, usernames, keywords..."
+                placeholder="Cari tagar, nama pengguna, kata kunci..."
                 className="w-full text-xs bg-slate-950 border border-[#2A2A2E] rounded-lg py-2.5 pl-9 pr-4 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-[#D4AF37]/50"
                 id="sidebar-search-input"
               />
@@ -491,22 +739,24 @@ export default function App() {
           {/* Keyword Discovery and OSINT scanning */}
           <div className="border-t border-[#2A2A2E] pt-5">
             <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#66666E]/90 mb-3 flex items-center gap-1.5 font-bold">
-              <Cpu className="w-3.5 h-3.5 text-rose-400" /> OSINT Keyword Discovery
+              <Cpu className="w-3.5 h-3.5 text-rose-400" /> Pencarian Kata Kunci OSINT
             </h3>
-            <form onSubmit={handleKeywordSearch} className="space-y-2">
+            <div className="space-y-2">
               <div className="relative">
                 <Search className="absolute left-3 top-3 w-4 h-4 text-[#D4AF37]" />
                 <input
                   type="text"
                   value={searchKeywordInput}
                   onChange={(e) => setSearchKeywordInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !isSearchingKeyword) handleKeywordSearch(); }}
                   placeholder="Masukkan kata kunci (e.g. Pemilu)..."
                   className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg py-2.5 pl-9 pr-4 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-rose-500/50"
                 />
               </div>
               <div className="flex gap-2">
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={handleKeywordSearch}
                   disabled={isSearchingKeyword}
                   className="flex-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-medium py-2 px-3 rounded-lg text-xs font-mono transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
@@ -529,7 +779,7 @@ export default function App() {
                   </button>
                 )}
               </div>
-            </form>
+            </div>
             {currentKeyword && (
               <div className="mt-3 p-3 bg-rose-950/20 rounded-lg border border-rose-500/10 text-left">
                 <p className="text-[10px] uppercase font-mono text-rose-400 font-bold tracking-wide">AKTIF MEMANTAU</p>
@@ -548,21 +798,19 @@ export default function App() {
             </h3>
             <div className="flex gap-2">
               <div className="flex-1">
-                <label className="text-[9px] font-mono text-slate-600 uppercase block mb-1">Mulai</label>
-                <input
-                  type="date"
+                <DatePickerModal
+                  label="Mulai"
                   value={dateRange.start}
-                  onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                  className="w-full text-[11px] bg-slate-950 border border-slate-800 rounded-lg py-2 px-2.5 text-slate-300 focus:outline-none focus:border-[#D4AF37]/50"
+                  onChange={(val) => setDateRange(prev => ({ ...prev, start: val }))}
+                  placeholder="DD/MM/YYYY"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[9px] font-mono text-slate-600 uppercase block mb-1">Akhir</label>
-                <input
-                  type="date"
+                <DatePickerModal
+                  label="Akhir"
                   value={dateRange.end}
-                  onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                  className="w-full text-[11px] bg-slate-950 border border-slate-800 rounded-lg py-2 px-2.5 text-slate-300 focus:outline-none focus:border-[#D4AF37]/50"
+                  onChange={(val) => setDateRange(prev => ({ ...prev, end: val }))}
+                  placeholder="DD/MM/YYYY"
                 />
               </div>
             </div>
@@ -576,7 +824,7 @@ export default function App() {
               <strong className="block mb-1 font-bold text-xs flex items-center gap-1.5">
                 <ShieldAlert className="w-3.5 h-3.5" /> DEEP COGNITION ALERT
               </strong>
-              Spike in coordinated copypasta across 3 regional campaigns detected today. Synchronize threat maps utilizing the siber threat engine analysis tab.
+              Lonjakan copypasta terkoordinasi di 3 kampanye regional terdeteksi hari ini. Sinkronkan peta ancaman menggunakan tab analisis mesin ancaman siber.
             </div>
           </div>
         </aside>
@@ -584,12 +832,14 @@ export default function App() {
         {/* Dynamic Nav Tabs for Mobile Views */}
         <div className="lg:hidden flex bg-[#0F0F12] border-b border-[#2A2A2E] overflow-x-auto whitespace-nowrap p-2 scrollbar-none" id="mobile-nav-tabs">
           {[
-            { id: 'campaigns', label: 'Campaigns' },
-            { id: 'accounts', label: 'Suspicious Accounts' },
-            { id: 'graph', label: 'Correlation Graph' },
-            { id: 'analytics', label: 'Social Analytics' },
-            { id: 'analyzer', label: 'Threat Scan' },
-            { id: 'reporter', label: 'Report Incident' },
+            { id: 'campaigns', label: 'Kampanye' },
+            { id: 'accounts', label: 'Akun Mencurigakan' },
+            { id: 'graph', label: 'Grafik Korelasi' },
+            { id: 'analytics', label: 'Analitik Sosial' },
+            { id: 'tren', label: 'Tren Harian' },
+            { id: 'analyzer', label: 'Pindai Ancaman' },
+            { id: 'reporter', label: 'Lapor Insiden' },
+            { id: 'settings', label: 'Pengaturan' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -623,7 +873,7 @@ export default function App() {
                 </div>
                 {platformFilter !== 'All' && (
                   <span className="text-xs bg-[#1A1A1F] border border-[#D4AF37]/30 text-[#D4AF37] font-semibold px-2.5 py-1 rounded">
-                    Filtering: {platformFilter}
+                    Filter: {platformFilter}
                   </span>
                 )}
               </div>
@@ -636,7 +886,7 @@ export default function App() {
                   {filteredCampaigns.length === 0 ? (
                     <div className="p-8 text-center bg-[#15151A] rounded-xl border border-[#2A2A2E] text-slate-500">
                       <AlertTriangle className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-                      <p className="text-xs">No coordinated campaigns match the current criteria.</p>
+                      <p className="text-xs">Tidak ada kampanye yang sesuai dengan kriteria saat ini.</p>
                     </div>
                   ) : (
                     filteredCampaigns.map((camp) => (
@@ -651,9 +901,18 @@ export default function App() {
                         }`}
                       >
                         <div className="flex justify-between items-start mb-2">
-                          <span className="text-xs font-mono font-bold text-rose-400 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping"></span>
-                            {camp.intensity.toUpperCase()} THREAT
+                          <span className={`text-xs font-mono font-bold flex items-center gap-1 ${
+                            camp.intensity === 'Critical' || camp.intensity === 'High' ? 'text-rose-400' :
+                            camp.intensity === 'Medium' ? 'text-amber-400' :
+                            'text-slate-400'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              camp.intensity === 'Critical' ? 'bg-rose-500 animate-ping' :
+                              camp.intensity === 'High' ? 'bg-rose-500' :
+                              camp.intensity === 'Medium' ? 'bg-amber-500' :
+                              'bg-slate-500'
+                            }`}></span>
+                            ANCAMAN {camp.intensity.toUpperCase()}
                           </span>
                           <span className="text-[10px] font-mono text-slate-500 bg-slate-950 px-2 py-0.5 rounded">
                             {camp.topic}
@@ -673,7 +932,7 @@ export default function App() {
                           </div>
                           <span className="font-mono text-amber-400 flex items-center gap-1">
                             <TrendingUp className="w-3 h-3 text-orange-400" />
-                            {camp.reach.toLocaleString()} reach
+                            {camp.reach.toLocaleString()} jangkauan
                           </span>
                         </div>
                       </div>
@@ -688,7 +947,7 @@ export default function App() {
                       {/* Detailed meta headers */}
                       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2A2A2E] pb-4 mb-5">
                         <div>
-                          <span className="text-[10px] uppercase tracking-wider font-bold text-amber-500 font-mono">Detailed Campaign Profile</span>
+                          <span className="text-[10px] uppercase tracking-wider font-bold text-amber-500 font-mono">Profil Kampanye Detail</span>
                           <h3 className="text-slate-100 text-lg font-serif italic font-semibold mt-1 flex items-center gap-2">
                             {selectedCampaign.title}
                           </h3>
@@ -705,12 +964,12 @@ export default function App() {
                             onClick={() => {
                               setAnalyzeContent(`Campaign investigation payload for ${selectedCampaign.title}: ${selectedCampaign.description}. Key Narratives: ${selectedCampaign.keyNarrative}. Focused hashtags: ${selectedCampaign.hashtags.join(', ')}.`);
                               setActiveTab('analyzer');
-                              showNotification('success', 'Campaign context copied into Threat Analyzer matrix!');
+                              showNotification('success', 'Konteks kampanye disalin ke Threat Analyzer!');
                             }}
                             className="bg-amber-500/10 hover:bg-amber-500/20 text-[#D4AF37] font-semibold border border-amber-500/20 hover:border-[#D4AF37]/50 text-[11px] font-mono px-2.5 py-1 rounded transition duration-200"
                             id="btn-scan-campaign"
                           >
-                            AI Scan Narrative
+                            Pindai AI Narasi
                           </button>
                         </div>
                       </div>
@@ -718,14 +977,32 @@ export default function App() {
                       {/* Topic, Description, Key Narrative block */}
                       <div className="space-y-4">
                         <div>
-                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1">Strategic Objective</h5>
+                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1">Objektif Strategis</h5>
                           <p className="text-xs text-slate-300 leading-relaxed bg-[#0F0F12] border border-[#2A2A2E]/70 p-3.5 rounded-lg">
                             {selectedCampaign.description}
                           </p>
                         </div>
 
+                          {/* AI Campaign Brief */}
+                          <div>
+                            <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1 flex items-center justify-between">
+                              <span className="flex items-center gap-1.5">
+                                <span className={`w-1.5 h-1.5 rounded-full ${campaignAIMode === 'AI' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                                Risalah Intelijen AI
+                              </span>
+                              {campaignAIMode && (
+                                <span className={`text-[8px] px-1.5 py-0.5 rounded ${campaignAIMode === 'AI' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                  {campaignAIMode}
+                                </span>
+                              )}
+                            </h5>
+                            <p className="text-xs text-slate-300 leading-relaxed bg-[#0F0F12] border border-[#2A2A2E]/70 p-3.5 rounded-lg border-l-2 border-l-emerald-500/50">
+                              {campaignBrief || 'Menganalisis kampanye...'}
+                            </p>
+                          </div>
+
                         <div>
-                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1">Coordinated Core Narrative</h5>
+                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1">Narasi Inti Terkoordinasi</h5>
                           <p className="text-xs text-slate-300 leading-relaxed bg-[#0F0F12] border border-[#2A2A2E]/70 p-3.5 rounded-lg border-l-2 border-l-[#D4AF37]">
                             {selectedCampaign.keyNarrative}
                           </p>
@@ -733,7 +1010,7 @@ export default function App() {
 
                         {/* Coordinated Hashtags */}
                         <div>
-                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1.5">Monitored Amplification Hashtags</h5>
+                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1.5">Tagar Amplifikasi Terpantau</h5>
                           <div className="flex flex-wrap gap-2">
                             {selectedCampaign.hashtags.map((tag) => (
                               <span 
@@ -755,7 +1032,7 @@ export default function App() {
                           {/* Bot Ratio Bar */}
                           <div className="bg-slate-950/40 border border-slate-900 p-3.5 rounded-lg flex flex-col justify-between">
                             <div className="flex justify-between items-center mb-1">
-                              <span className="text-[10px] font-mono text-slate-500 font-semibold">BOTNET DENSITY</span>
+                              <span className="text-[10px] font-mono text-slate-500 font-semibold">KEPADATAN BUZZER</span>
                               <span className="text-xs font-bold font-mono text-rose-400">{Math.round(selectedCampaign.botRatio * 100)}%</span>
                             </div>
                             <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
@@ -765,28 +1042,34 @@ export default function App() {
                               ></div>
                             </div>
                             <p className="text-[9px] text-[#A0A0A5] mt-1.5">
-                              Percent of volume generated by pre-programmed scheduler algorithms.
+                              Persentase volume yang dihasilkan oleh algoritma penjadwal terprogram.
                             </p>
                           </div>
 
                           {/* Network Severity */}
                           <div className="bg-slate-950/40 border border-slate-900 p-3.5 rounded-lg flex flex-col justify-between">
                             <div className="flex justify-between items-center mb-1">
-                              <span className="text-[10px] font-mono text-slate-500 font-semibold">INTENSITY CLASSIFICATION</span>
-                              <span className="text-xs font-bold font-mono text-amber-400">{selectedCampaign.intensity}</span>
+                              <span className="text-[10px] font-mono text-slate-500 font-semibold flex items-center justify-between w-full">
+                                KLASIFIKASI INTENSITAS
+                                {campaignAIMode && (
+                                  <span className={`text-[8px] px-1.5 py-0.5 rounded ${campaignAIMode === 'AI' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                    {campaignAIMode}
+                                  </span>
+                                )}
+                              </span>
                             </div>
-                            <div className="flex gap-1">
+                            <div className="flex gap-1 mt-1">
                               {['Low', 'Medium', 'High', 'Critical'].map((lv) => (
                                 <span 
                                   key={lv} 
                                   className={`flex-1 h-1 rounded ${
-                                    selectedCampaign.intensity === lv ? 'bg-orange-500' : 'bg-slate-800'
+                                    selectedCampaign.intensity === lv ? (lv === 'Critical' ? 'bg-rose-500' : 'bg-orange-500') : 'bg-slate-800'
                                   }`}
                                 />
                               ))}
                             </div>
                             <p className="text-[9px] text-[#A0A0A5] mt-1.5">
-                              Campaign prioritization indicator within threat matrix.
+                              Indikator prioritas kampanye dalam matriks ancaman.
                             </p>
                           </div>
                         </div>
@@ -794,29 +1077,55 @@ export default function App() {
                         {/* Reach & Active node details */}
                         <div className="grid grid-cols-3 gap-2 text-center pt-2">
                           <div className="bg-slate-950/70 border border-slate-900 p-2 rounded-lg">
-                            <span className="text-[9.5px] font-mono text-slate-500 font-bold block uppercase">Est. Impression</span>
+                            <span className="text-[9.5px] font-mono text-slate-500 font-bold block uppercase">Estimasi Tayangan</span>
                             <span className="text-sm font-semibold font-serif text-[#D4AF37]">{selectedCampaign.reach.toLocaleString()}</span>
                           </div>
-                          <div className="bg-slate-950/70 border border-slate-900 p-2 rounded-lg">
-                            <span className="text-[9.5px] font-mono text-slate-500 font-bold block uppercase">Tracked Agents</span>
+                          <div className="bg-slate-950/70 border border-slate-900 p-2 rounded-lg relative">
+                            <span className="text-[9.5px] font-mono text-slate-500 font-bold block uppercase">Agen Terpantau</span>
                             <span className="text-sm font-semibold font-serif text-[#D4AF37]">{selectedCampaign.buzzerCount}</span>
                           </div>
-                          <div className="bg-slate-950/70 border border-slate-900 p-2 rounded-lg">
-                            <span className="text-[9.5px] font-mono text-slate-500 font-bold block uppercase">Sentiment Bias</span>
+                          <div className="bg-slate-950/70 border border-slate-900 p-2 rounded-lg relative">
+                            <button
+                              onClick={() => handlePredictRisk(selectedCampaign)}
+                              disabled={isPredicting}
+                              className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full flex items-center justify-center border border-indigo-400 shadow-lg transition z-10"
+                              title="Prediksi Tren Risiko AI"
+                            >
+                              {isPredicting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <BrainCircuit className="w-3 h-3" />}
+                            </button>
+                            <span className="text-[9.5px] font-mono text-slate-500 font-bold block uppercase">Tren Risiko AI</span>
                             <span className={`text-sm font-semibold font-serif ${
-                              selectedCampaign.sentiment === 'Positive' ? 'text-emerald-400' :
-                              selectedCampaign.sentiment === 'Negative' ? 'text-rose-400' :
+                              selectedCampaign.predictedRiskTrend === 'rising' ? 'text-rose-500' :
+                              selectedCampaign.predictedRiskTrend === 'falling' ? 'text-emerald-500' :
                               'text-amber-400'
-                            }`}>{selectedCampaign.sentiment}</span>
+                            }`}>
+                              {selectedCampaign.predictedRiskTrend ? selectedCampaign.predictedRiskTrend.toUpperCase() : 'STABLE'}
+                            </span>
                           </div>
                         </div>
+
+                        {selectedCampaign.aiInsight && (
+                          <div className="mt-3 p-3 bg-indigo-950/20 border border-indigo-500/20 rounded-lg text-left">
+                            <h6 className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest mb-1 flex items-center justify-between">
+                              <span className="flex items-center gap-1">
+                                <BrainCircuit className="w-3 h-3" /> Wawasan Mendalam AI
+                              </span>
+                              <span className={`text-[8px] px-1.5 py-0.5 rounded ${selectedCampaign.riskTrendMode === 'AI' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                {selectedCampaign.riskTrendMode || 'Heuristic'}
+                              </span>
+                            </h6>
+                            <p className="text-[11px] text-slate-300 leading-normal italic">
+                              "{selectedCampaign.aiInsight}"
+                            </p>
+                          </div>
+                        )}
 
                       </div>
                     </div>
                   ) : (
                     <div className="h-full flex flex-col justify-center items-center text-slate-500 text-center py-20">
                       <Radio className="w-12 h-12 text-slate-700 stroke-1 mb-3 animate-pulse" />
-                      <p className="font-semibold text-sm">Select a campaign in the left listing to inspect details.</p>
+                      <p className="font-semibold text-sm">Pilih kampanye di daftar kiri untuk melihat detail.</p>
                     </div>
                   )}
 
@@ -824,9 +1133,9 @@ export default function App() {
                   <div className="mt-6 pt-4 border-t border-[#2A2A2E]/80 flex items-center justify-between text-[11px] text-slate-500">
                     <span className="flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5 text-zinc-500" />
-                      Live Feed Start: {selectedCampaign?.startDate || "2026-06"}
+                      Mulai Umpan Langsung: {selectedCampaign?.startDate || "2026-06"}
                     </span>
-                    <span className="italic">ID: {selectedCampaign?.id}</span>
+                    <span className="italic">ID Kampanye: {selectedCampaign?.id}</span>
                   </div>
                 </div>
 
@@ -845,7 +1154,7 @@ export default function App() {
                     Profil Akun Mencurigakan (Buzzer Portal)
                   </h2>
                   <p className="text-xs text-slate-400 mt-1">
-                    Pemetaan agen/client botnet, spammer, dan operator manipulator opini publik. Klik untuk membedah.
+                    Pemetaan agen/client buzzer, spammer, dan operator manipulator opini publik. Klik untuk membedah.
                   </p>
                 </div>
                 {platformFilter !== 'All' && (
@@ -863,7 +1172,7 @@ export default function App() {
                   {filteredAccounts.length === 0 ? (
                     <div className="p-8 text-center bg-[#15151A] rounded-xl border border-[#2A2A2E] text-slate-500">
                       <AlertTriangle className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-                      <p className="text-xs">No entities match the filters set.</p>
+                      <p className="text-xs">Tidak ada entitas yang sesuai filter.</p>
                     </div>
                   ) : (
                     filteredAccounts.map((acc) => (
@@ -950,8 +1259,20 @@ export default function App() {
                         </div>
                         
                         <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleCollectEvidence(selectedAccount)}
+                            disabled={isCollectingEvidence}
+                            className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono font-bold rounded-lg border transition ${
+                              isCollectingEvidence 
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-500 animate-pulse' 
+                                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                            }`}
+                          >
+                            {isCollectingEvidence ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BrainCircuit className="w-3.5 h-3.5" />}
+                            {isCollectingEvidence ? 'AI ANALYSING...' : 'COLLECT AI EVIDENCE'}
+                          </button>
                           <span className={`text-xs px-2.5 py-0.5 rounded font-mono font-bold ${
-                            selectedAccount.status === 'Verified Bot' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                            selectedAccount.status === 'Verified Buzzer' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
                             selectedAccount.status === 'Suspended' ? 'bg-zinc-700/20 text-zinc-500 border border-zinc-700/20' :
                             'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                           }`}>
@@ -988,7 +1309,7 @@ export default function App() {
                         <div className="flex justify-between items-center mb-1.5">
                           <div className="flex items-center gap-1.5">
                             <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
-                            <span className="text-[10px] tracking-wider font-mono text-slate-400 font-bold uppercase">BOTNET COORDINATION RATING</span>
+                            <span className="text-[10px] tracking-wider font-mono text-slate-400 font-bold uppercase">RATING KOORDINASI BUZZER</span>
                           </div>
                           <span className="text-sm font-extrabold font-mono text-red-500">{selectedAccount.botScore / 100} / 1.0</span>
                         </div>
@@ -1006,37 +1327,96 @@ export default function App() {
                       {/* Micro Statistics */}
                       <div className="grid grid-cols-3 gap-3 mb-5 text-center">
                         <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-900/60">
-                          <span className="text-[9.5px] font-mono text-slate-500 block uppercase font-bold">Followers</span>
+                          <span className="text-[9.5px] font-mono text-slate-500 block uppercase font-bold">Pengikut</span>
                           <span className="text-sm font-semibold font-mono text-slate-300">{selectedAccount.followers.toLocaleString()}</span>
                         </div>
                         <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-900/60">
-                          <span className="text-[9.5px] font-mono text-slate-500 block uppercase font-bold">Following</span>
+                          <span className="text-[9.5px] font-mono text-slate-500 block uppercase font-bold">Mengikuti</span>
                           <span className="text-sm font-semibold font-mono text-slate-300">{selectedAccount.following.toLocaleString()}</span>
                         </div>
                         <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-900/60">
-                          <span className="text-[9.5px] font-mono text-slate-500 block uppercase font-bold">Copypastas</span>
-                          <span className="text-sm font-semibold font-mono text-rose-400">{selectedAccount.recentCopypastaCount} logged</span>
+                          <span className="text-[9.5px] font-mono text-slate-500 block uppercase font-bold">Copypasta</span>
+                          <span className="text-sm font-semibold font-mono text-rose-400">{selectedAccount.recentCopypastaCount} tercatat</span>
                         </div>
                       </div>
 
                       {/* Coordination Signals */}
                       <div className="space-y-3">
-                        <h4 className="text-[10px] tracking-widest font-mono uppercase text-[#66666E]/90 font-bold mb-2">Coordination Footprints</h4>
+                        <h4 className="text-[10px] tracking-widest font-mono uppercase text-[#66666E]/90 font-bold mb-2">Jejak Koordinasi</h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs text-slate-300">
                           <div className="bg-slate-950/30 p-3 rounded-lg border border-slate-900 flex items-start space-x-2">
                             <CornerDownRight className="w-4 h-4 text-[#D4AF37] flex-shrink-0 mt-0.5" />
                             <div>
-                              <p className="font-semibold text-slate-200">Temporal Synchronization</p>
-                              <p className="text-[11px] text-slate-400 mt-1">Posts within 4 seconds of central hub instructions.</p>
+                              <p className="font-semibold text-slate-200">Sinkronisasi Temporal</p>
+                              <p className="text-[11px] text-slate-400 mt-1">Posting dalam 4 detik dari instruksi pusat.</p>
                             </div>
                           </div>
                           <div className="bg-slate-950/30 p-3 rounded-lg border border-slate-900 flex items-start space-x-2">
                             <CornerDownRight className="w-4 h-4 text-[#D4AF37] flex-shrink-0 mt-0.5" />
                             <div>
-                              <p className="font-semibold text-slate-200">Repetitive Sentence Trees</p>
-                              <p className="text-[11px] text-slate-400 mt-1">Phrases overlap perfectly with known disinformation templates.</p>
+                              <p className="font-semibold text-slate-200">Pohon Kalimat Berulang</p>
+                              <p className="text-[11px] text-slate-400 mt-1">Frasa cocok sempurna dengan template disinformasi yang dikenal.</p>
                             </div>
                           </div>
+                        </div>
+                      </div>
+
+                      {/* AI Account Brief */}
+                      {accountBrief && (
+                        <div className="mb-5">
+                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-1 flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                            AI Analisis Akun
+                          </h5>
+                          <p className="text-xs text-slate-300 leading-relaxed bg-[#0F0F12] border border-[#2A2A2E]/70 p-3.5 rounded-lg border-l-2 border-l-emerald-500/50">
+                            {accountBrief}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Post History */}
+                      {accountPosts.length > 0 && (
+                        <div className="mb-5">
+                          <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-2">Riwayat Postingan</h5>
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {accountPosts.map((post, i) => (
+                              <div key={i} className="bg-slate-950/40 border border-slate-900 p-2.5 rounded-lg">
+                                <p className="text-[11px] text-slate-300 leading-relaxed line-clamp-2">{post.text}</p>
+                                <div className="flex items-center gap-3 mt-1.5 text-[9px] font-mono text-slate-600">
+                                  <span>❤ {post.likes || 0}</span>
+                                  <span>💬 {post.comments || 0}</span>
+                                  <span>🔄 {post.shares || 0}</span>
+                                  {post.label && (
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] ${
+                                      post.label === 'propaganda' ? 'bg-red-900/30 text-red-400' :
+                                      post.label === 'copypasta' ? 'bg-orange-900/30 text-orange-400' :
+                                      post.label === 'spam' ? 'bg-yellow-900/30 text-yellow-400' :
+                                      'bg-green-900/30 text-green-400'
+                                    }`}>
+                                      {post.label}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Cross-platform footprint */}
+                      <div className="mb-5">
+                        <h5 className="text-[10px] tracking-widest font-mono uppercase text-slate-500 font-bold mb-2">Jejak Lintas Platform</h5>
+                        <div className="flex gap-2">
+                          {['X', 'YouTube', 'TikTok'].map(p => (
+                            <div key={p} className={`flex-1 p-2.5 rounded-lg border text-center ${
+                              selectedAccount.platform === p
+                                ? 'bg-[#D4AF37]/10 border-[#D4AF37]/30 text-[#D4AF37]'
+                                : 'bg-slate-950/30 border-slate-800/60 text-slate-600'
+                            }`}>
+                              <span className="text-[10px] font-bold font-mono">{p === 'X' ? '𝕏' : p === 'YouTube' ? '▶' : '♬'} {p}</span>
+                              {selectedAccount.platform === p && <span className="text-[8px] block text-[#D4AF37]/70 mt-0.5">AKTIF</span>}
+                            </div>
+                          ))}
                         </div>
                       </div>
 
@@ -1044,7 +1424,7 @@ export default function App() {
                   ) : (
                     <div className="h-full flex flex-col justify-center items-center text-slate-500 text-center py-20">
                       <UserX className="w-12 h-12 text-slate-700 stroke-1 mb-3" />
-                      <p className="font-semibold text-sm">Select an account card to inspect the threat levels.</p>
+                      <p className="font-semibold text-sm">Pilih kartu akun untuk memeriksa tingkat ancaman.</p>
                     </div>
                   )}
 
@@ -1052,7 +1432,7 @@ export default function App() {
                   <div className="mt-6 pt-4 border-t border-[#2A2A2E]/80 flex items-center justify-between text-[11px] text-slate-500">
                     <span className="flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5 text-zinc-500" />
-                      Detected Active Signature: {selectedAccount?.lastActive || "Recently"}
+                      Sinyal Aktif Terdeteksi: {selectedAccount?.lastActive || "Baru Saja"}
                     </span>
                     <span className="italic">Threat Node Identifier: {selectedAccount?.id}</span>
                   </div>
@@ -1072,31 +1452,33 @@ export default function App() {
                   Peta Korelasi Kampanye Multi-Platform
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  Peta simpul visual koordinasi buzzer. Menghubungkan master server, tagar manipulatif, dan bot penguat pesan.
+                    Peta simpul visual koordinasi buzzer. Menghubungkan master server, tagar manipulatif, dan akun buzzer penguat pesan.
                 </p>
               </div>
 
               {/* Direct insertion of interactive Network Canvas */}
-              <NetworkGraph onSelectNode={handleNodeSelect} reloadTrigger={reloadTrigger} dateRange={dateRange} />
+                  <Suspense fallback={<div className="h-[480px] flex items-center justify-center text-slate-500 font-mono text-sm border border-slate-800 rounded-xl">Memuat Grafik Interaktif...</div>}>
+                <NetworkGraph onSelectNode={handleNodeSelect} reloadTrigger={reloadTrigger} dateRange={dateRange} />
+              </Suspense>
 
               {/* Auxiliary details explaining the map */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-[#0F0F12] border border-[#2A2A2E] p-5 rounded-2xl relative" id="graph-legends-container">
                 <div>
-                  <h4 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-semibold">1. Campaign Hub</h4>
+                  <h4 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-semibold">1. Pusat Kampanye</h4>
                   <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                     Senter utama (simpul berwarna ungu) mendefinisikan objektif propaganda atau narasi sentral yang disuntikkan.
                   </p>
                 </div>
                 <div>
-                  <h4 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-semibold">2. Propagandist Master</h4>
+                  <h4 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-semibold">2. Master Propagandis</h4>
                   <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    Individu berpengaruh atau server botnet master (simpul oranye) bertindak sebagai distributor/orator pertama.
+                    Individu berpengaruh atau master buzzer (simpul magenta) bertindak sebagai distributor/orator pertama.
                   </p>
                 </div>
                 <div>
-                  <h4 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-semibold">3. Bot Client Clients</h4>
+                  <h4 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-semibold">3. Node Buzzer</h4>
                   <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    Client bot & shill (simpul merah) yang secara simultan menduplikasi postingan (copypasta) demi memalsukan viralitas.
+                    Akun buzzer (simpul oranye/abu) yang menduplikasi postingan (copypasta) demi memalsukan viralitas.
                   </p>
                 </div>
               </div>
@@ -1104,9 +1486,20 @@ export default function App() {
           )}
 
 
-          {/* TAB 3.5: Social Accounts & Analytics Dashboard */}
+           {/* TAB 3.5: Social Accounts & Analytics Dashboard */}
           {activeTab === 'analytics' && (
-            <SocialAnalyticsDashboard showNotification={showNotification} reloadTrigger={reloadTrigger} dateRange={dateRange} />
+            <Suspense fallback={<div className="p-8 text-slate-500">Loading Analitik...</div>}>
+              <SocialAnalyticsDashboard showNotification={showNotification} />
+            </Suspense>
+          )}
+
+          {activeTab === 'tren' && (
+            <TrendDashboard 
+              trendData={trendData} 
+              insight={trendInsight.insight} 
+              insightMode={trendInsight.mode} 
+              isTrendLoading={isTrendLoading} 
+            />
           )}
 
           {/* TAB 4: Gemini-powered Analyzer Playground */}
@@ -1115,18 +1508,36 @@ export default function App() {
               <div>
                 <h2 className="text-xl lg:text-2xl font-serif text-[#F5F5F5] font-semibold flex items-center gap-2">
                   <BrainCircuit className="w-5 h-5 text-[#D4AF37]" />
-                  Radar Detektif AI (Heuristic Threat Engine)
+                  Radar Detektif AI — Pemindai Ancaman
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  Tempelkan teks postingan, tautan promosi, atau biografi akun sosial media untuk membedah pola inautentik dan koordinasi buzzer.
+                  Tempelkan teks postingan, tautan promosi, atau biografi akun untuk mendeteksi pola buzzer dan koordinasi inautentik.
                 </p>
+              </div>
+
+              {/* Sample data quick-fill buttons */}
+              <div className="flex flex-wrap gap-2">
+                <span className="text-[10px] font-mono text-slate-500 self-center mr-1">Coba sampel:</span>
+                {[
+                  { type: 'copypasta', label: 'Copypasta Buzzer' },
+                  { type: 'profile', label: 'Profil Mencurigakan' },
+                  { type: 'campaign', label: 'Kampanye Terkoordinasi' },
+                ].map(s => (
+                  <button
+                    key={s.type}
+                    onClick={() => fillSampleData(s.type)}
+                    className="text-[10px] font-mono px-2.5 py-1 rounded-full border border-slate-700 text-slate-400 hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition bg-slate-900/30"
+                  >
+                    {s.label}
+                  </button>
+                ))}
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 
                 {/* Form column */}
                 <div className="lg:col-span-5 bg-[#15151A] border border-[#2A2A2E] rounded-xl p-5" id="analyzer-form-container">
-                  <h3 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-bold mb-4">Input Parameter Scanner</h3>
+                  <h3 className="text-xs font-mono uppercase text-[#D4AF37] tracking-wider font-bold mb-4">Parameter Pemindaian</h3>
                   
                   <form onSubmit={handleRunAnalysis} className="space-y-4">
                     <div>
@@ -1134,8 +1545,8 @@ export default function App() {
                       <div className="grid grid-cols-3 gap-2">
                         {[
                           { id: 'copypasta', label: 'Copypasta' },
-                          { id: 'profile', label: 'User Bio' },
-                          { id: 'campaign', label: 'Campaign' }
+                          { id: 'profile', label: 'Profil' },
+                          { id: 'campaign', label: 'Kampanye' }
                         ].map(t => (
                           <button
                             type="button"
@@ -1155,14 +1566,14 @@ export default function App() {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-mono uppercase text-slate-400 font-bold mb-1.5 font-bold">Platform Asal</label>
+                      <label className="block text-[11px] font-mono uppercase text-slate-400 font-bold mb-1.5">Platform Asal</label>
                       <select
                         value={analyzePlatform}
                         onChange={(e) => setAnalyzePlatform(e.target.value as Platform)}
                         className="w-full text-xs font-mono bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-300 focus:outline-none focus:border-[#D4AF37]"
                         id="select-scan-platform"
                       >
-                        <option value="All">Semua Platform (All)</option>
+                        <option value="All">Semua Platform</option>
                         <option value="X">X (Twitter)</option>
                         <option value="TikTok">TikTok</option>
                         <option value="YouTube">YouTube</option>
@@ -1176,7 +1587,7 @@ export default function App() {
                         onChange={(e) => setAnalyzeContent(e.target.value)}
                         placeholder={
                           analyzeType === 'copypasta' 
-                            ? 'Tempelkan beberapa baris komentar atau tweet mencurigakan di sini...' 
+                            ? 'Tempelkan beberapa baris komentar atau tweet mencurigakan...' 
                             : analyzeType === 'profile'
                             ? 'Contoh:\nUsername: @budi_nasionalis\nBio: Menolak Lupa, Dukung NKRI #SaveNegara\nFollowers: 12\nFollowing: 1950'
                             : 'Deskripsikan taktik narasi kampanye digital yang dicurigai...'
@@ -1185,6 +1596,16 @@ export default function App() {
                         className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-[#D4AF37]"
                         id="textarea-scan-content"
                       />
+                      {analyzeContent && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {analyzeContent.match(/#\w+/g)?.map((tag, i) => (
+                            <span key={i} className="text-[9px] bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded font-mono">{tag}</span>
+                          ))}
+                          {analyzeContent.match(/@\w+/g)?.map((mention, i) => (
+                            <span key={i} className="text-[9px] bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded font-mono">{mention}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <button
@@ -1196,12 +1617,12 @@ export default function App() {
                       {isAnalyzing ? (
                         <>
                           <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
-                          Memproses Threat Matrix...
+                          Memproses Matriks Ancaman...
                         </>
                       ) : (
                         <>
                           <Send className="w-4 h-4 text-black" />
-                          RUN DEEP SCANNERS
+                          JALANKAN PEMINDAIAN
                         </>
                       )}
                     </button>
@@ -1212,14 +1633,13 @@ export default function App() {
                 <div className="lg:col-span-7 bg-[#0F0F12] border border-[#2A2A2E] rounded-xl p-5 lg:p-6 min-h-[400px] flex flex-col justify-between" id="analyzer-results-viewport">
                   {isAnalyzing ? (
                     <div className="flex-1 flex flex-col justify-center items-center py-16 space-y-4">
-                      {/* Elaborate styled cyber telemetry scanning sequence */}
                       <div className="relative">
                         <div className="w-16 h-16 rounded-full border-4 border-amber-500/10 border-t-amber-500 animate-spin"></div>
                         <BrainCircuit className="w-8 h-8 text-amber-400 absolute inset-0 m-auto animate-pulse" />
                       </div>
                       <div className="text-center">
                         <p className="text-sm font-mono font-bold text-amber-500">Menganalisis Sidik Jari Digital...</p>
-                        <p className="text-[11px] text-slate-500 font-mono mt-1 font-semibold">Cross-referencing boilerplate databases via local threat patterns</p>
+                        <p className="text-[11px] text-slate-500 font-mono mt-1">Memeriksa pola koordinasi dan indikator buzzer.</p>
                       </div>
                     </div>
                   ) : analysisResult ? (
@@ -1227,27 +1647,66 @@ export default function App() {
                       {/* Metric headers */}
                       <div className="flex flex-wrap justify-between items-start gap-2 border-b border-slate-800 pb-3">
                         <div>
-                          <span className="text-[10px] uppercase font-mono tracking-widest text-[#66666E]">RADAR SCORE VERDICT</span>
+                          <span className="text-[10px] uppercase font-mono tracking-widest text-[#66666E]">SKOR RADAR</span>
                           <h4 className="text-slate-100 font-bold text-base mt-2 flex items-center gap-2">
                             <span className={`w-2.5 h-2.5 rounded-full ${analysisResult.isBuzzer ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></span>
-                            {analysisResult.verdict}
+                            {analysisResult.verdict === 'Genuine Account' ? 'Akun Asli' :
+                             analysisResult.verdict === 'Suspected Social Buzzer' ? 'Terindikasi Buzzer' :
+                             analysisResult.verdict === 'Coordinated Botnet Client' ? 'Koordinasi Buzter' :
+                             'Spammer Berulang'}
                           </h4>
                         </div>
                         <div className="text-right">
-                          <span className="text-[9.5px] uppercase font-mono tracking-widest text-[#66666E]">CONFIDENCE LEVEL</span>
+                          <span className="text-[9.5px] uppercase font-mono tracking-widest text-[#66666E]">TINGKAT KEYAKINAN</span>
                           <span className={`block font-serif italic text-2xl font-bold mt-1 ${analysisResult.confidenceScore > 75 ? 'text-rose-500' : 'text-[#D4AF37]'}`}>
                             {analysisResult.confidenceScore}%
                           </span>
                         </div>
                       </div>
 
+                        {/* Threat dimension bars */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-1">
+                              <span>Skor Ancaman</span>
+                              <span>{analysisResult.confidenceScore}%</span>
+                            </div>
+                            <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-900">
+                              <div className={`h-full rounded-full ${analysisResult.confidenceScore > 75 ? 'bg-red-500' : analysisResult.confidenceScore > 50 ? 'bg-amber-500' : 'bg-green-500'}`}
+                                style={{ width: `${analysisResult.confidenceScore}%` }} />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-1">
+                              <span>Sentimen Publik</span>
+                              <span>{analysisResult.sentimentScore}</span>
+                            </div>
+                            <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-900">
+                              <div className="h-full rounded-full bg-gradient-to-r from-red-500 via-zinc-500 to-emerald-500"
+                                style={{ width: `${((analysisResult.sentimentScore + 100) / 200) * 100}%` }} />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Keyword Suggestion (New Feature) */}
+                        <div className="mt-4 p-3 bg-slate-900/50 rounded-lg border border-slate-800">
+                           <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block mb-2">Kata Kunci Terdeteksi (Analisis Lanjutan):</span>
+                           <div className="flex flex-wrap gap-2">
+                             {analysisResult.detectedNarratives.flatMap(n => n.split(' ')).filter(w => w.length > 5).slice(0, 5).map((kw, i) => (
+                               <span key={i} className="text-[10px] bg-indigo-900/30 text-indigo-300 border border-indigo-500/20 px-2 py-0.5 rounded font-mono">
+                                 {kw.replace(/[.,!]/g, '')}
+                               </span>
+                             ))}
+                           </div>
+                        </div>
+
                       {/* Summary response block */}
                       <div className="bg-[#15151A] border border-[#D4AF37]/20 p-4 rounded-xl leading-relaxed text-xs text-slate-200">
-                        <strong className="text-[#D4AF37] block font-mono text-[10.5px] uppercase tracking-wider mb-1.5">Executive Summary Analysis</strong>
+                        <strong className="text-[#D4AF37] block font-mono text-[10.5px] uppercase tracking-wider mb-1.5">Ringkasan Eksekutif</strong>
                         {analysisResult.summary}
                         {analysisResult.fallback && (
                           <span className="block mt-2.5 text-[9.5px] font-mono text-amber-500/80 bg-amber-500/5 px-2 py-1 rounded inline-block">
-                            💡 Offline Simulation Active: Configure process.env.GEMINI_API_KEY in Secrets for live satellite signals.
+                            Mode Offline Aktif: Konfigurasikan GEMINI_API_KEY untuk analisis AI langsung.
                           </span>
                         )}
                       </div>
@@ -1255,7 +1714,7 @@ export default function App() {
                       {/* Characteristics and Red Flags block */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="bg-[#15151A]/60 p-4 rounded-xl border border-slate-900">
-                          <span className="text-[10.5px] font-mono uppercase text-[#66666E] font-bold block mb-2">Identified Core Traits</span>
+                          <span className="text-[10.5px] font-mono uppercase text-[#66666E] font-bold block mb-2">Karakteristik Terdeteksi</span>
                           <ul className="space-y-1.5 text-xs text-slate-300">
                             {analysisResult.botCharacteristics.map((char, idx) => (
                               <li key={idx} className="flex items-start space-x-2">
@@ -1267,7 +1726,7 @@ export default function App() {
                         </div>
 
                         <div className="bg-[#15151A]/60 p-4 rounded-xl border border-slate-900">
-                          <span className="text-[10.5px] font-mono uppercase text-[#66666E] font-bold block mb-2">Narrative/Topic Vectors</span>
+                          <span className="text-[10.5px] font-mono uppercase text-[#66666E] font-bold block mb-2">Vektor Narasi</span>
                           <ul className="space-y-1.5 text-xs text-slate-300">
                             {analysisResult.detectedNarratives.map((nar, idx) => (
                               <li key={idx} className="flex items-start space-x-2">
@@ -1282,7 +1741,7 @@ export default function App() {
                       {/* Red Flags specific warnings list */}
                       {analysisResult.redFlags && analysisResult.redFlags.length > 0 && (
                         <div>
-                          <span className="text-[10.5px] font-mono uppercase text-red-400 font-bold block mb-2.5">System Red Flag Signals</span>
+                          <span className="text-[10.5px] font-mono uppercase text-red-400 font-bold block mb-2.5">Bendera Merah Sistem</span>
                           <div className="space-y-2">
                             {analysisResult.redFlags.map((flag, idx) => (
                               <div key={idx} className="p-3 bg-red-500/5 border border-red-500/20 rounded-lg text-xs flex gap-2">
@@ -1301,14 +1760,14 @@ export default function App() {
                   ) : (
                     <div className="flex-1 flex flex-col justify-center items-center text-slate-600 text-center py-16">
                       <Cpu className="w-12 h-12 text-slate-800 mb-3" />
-                      <p className="font-semibold text-xs uppercase tracking-wider font-mono">Telemetry Output Ready</p>
-                      <p className="text-xs text-slate-500 mt-1 max-w-sm">Provide social content or account biographies in the left input forms to trigger cyber intelligence scanning sequence logs.</p>
+                      <p className="font-semibold text-xs uppercase tracking-wider font-mono">Output Siap</p>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm">Masukkan konten sosial atau biografi akun di form sebelah kiri untuk memulai pemindaian pola buzzer.</p>
                     </div>
                   )}
 
                   {/* Sandbox warning helper */}
                   <div className="pt-4 border-t border-slate-900 mt-6 text-[10px] text-slate-500 text-center italic font-mono uppercase">
-                    Detection threshold matrix parameters verified: Coordinated Inauthentic Behavior standard v4.1
+                    Parameter matriks deteksi terverifikasi: Standar Perilaku Inautentik Terkoordinasi v4.1
                   </div>
                 </div>
 
@@ -1427,12 +1886,12 @@ export default function App() {
                       {isSubmittingReport ? (
                         <>
                           <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
-                          Publishing...
+                          Menerbitkan...
                         </>
                       ) : (
                         <>
                           <Send className="w-4 h-4 text-black" />
-                          PUBLISH INCIDENT
+                          PUBLIKASI INSIDEN
                         </>
                       )}
                     </button>
@@ -1443,6 +1902,13 @@ export default function App() {
             </div>
           )}
 
+          {/* TAB 6: Settings */}
+          {activeTab === 'settings' && (
+            <Suspense fallback={<div className="h-96 flex items-center justify-center text-slate-500 font-mono text-sm">Memuat Pengaturan...</div>}>
+              <Settings showNotification={showNotification} />
+            </Suspense>
+          )}
+
         </section>
       </main>
 
@@ -1451,14 +1917,14 @@ export default function App() {
         <div className="flex space-x-6 overflow-hidden truncate">
           <span className="flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-black animate-pulse"></span>
-            SYSTEM STATUS: OPERATIONAL
+            STATUS SISTEM: BEROPERASI
           </span>
-          <span className="hidden md:inline">LAST SYNC: JUST NOW</span>
-          <span className="hidden md:inline">ENCRYPTION: SHA-256</span>
+          <span className="hidden md:inline">SINKRON TERAKHIR: BARU SAJA</span>
+          <span className="hidden md:inline">ENKRIPSI: SHA-256</span>
         </div>
         <div className="flex space-x-4">
-          <span className="hidden sm:inline">SAT NETWORK: CONSOLIDATED</span>
-          <span>ACTIVE COGNITION: ONLINE</span>
+          <span className="hidden sm:inline">JARINGAN SAT: TERKONSOLIDASI</span>
+          <span>KOGNISI AKTIF: DARING</span>
         </div>
       </footer>
 

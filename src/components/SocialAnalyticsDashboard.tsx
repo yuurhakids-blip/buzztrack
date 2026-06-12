@@ -11,6 +11,8 @@ import {
   MapPin, 
   Layers,
   ExternalLink,
+  BarChart3,
+  Globe,
 } from 'lucide-react';
 import { SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from '../types';
 import { api } from '../api';
@@ -21,28 +23,30 @@ import {
   XAxis, 
   YAxis, 
   CartesianGrid, 
-  Tooltip 
+  Tooltip,
+  BarChart,
+  Bar,
+  Legend,
 } from 'recharts';
 
 interface SocialAnalyticsDashboardProps {
   showNotification: (type: 'success' | 'error', text: string) => void;
   reloadTrigger?: number;
   dateRange?: { start: string; end: string };
+  initialTrend?: any[];
 }
 
-export default function SocialAnalyticsDashboard({ showNotification, reloadTrigger, dateRange }: SocialAnalyticsDashboardProps) {
-  // Accounts and Posts Data State
+export default function SocialAnalyticsDashboard({ showNotification, reloadTrigger, dateRange, initialTrend }: SocialAnalyticsDashboardProps) {
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [demographics, setDemographics] = useState<AudienceDemographics | null>(null);
-  const [timeline, setTimeline] = useState<DailyEngagement[]>([]);
+  const [timeline, setTimeline] = useState<DailyEngagement[]>(initialTrend || []);
   
-  // Interface selection states
   const [selectedPlatform, setSelectedPlatform] = useState<'All' | 'X' | 'YouTube' | 'TikTok'>('All');
   const [selectedMetric, setSelectedMetric] = useState<'likes' | 'comments' | 'shares' | 'reach'>('likes');
   const [showAllTopPosts, setShowAllTopPosts] = useState(false);
 
-  const [scraperStatus, setScraperStatus] = useState<{ twitter: boolean; youtube: boolean; tiktok: boolean } | null>(null);
+  const [scraperStatus, setScraperStatus] = useState<any>(null);
 
   useEffect(() => {
     fetchAnalyticsData();
@@ -70,12 +74,11 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
       setDemographics(demoData);
       setTimeline(timelineData);
     } catch (err) {
-      console.error("Error fetching social analytics dataset:", err);
-      showNotification('error', 'Failed to pull social channels telemetry.');
+      console.error("Gagal mengambil data analytics:", err);
+      showNotification('error', 'Gagal mengambil data dari platform sosial.');
     }
   };
 
-  // Calculations for filtered posts metrics
   const filteredAccounts = selectedPlatform === 'All' 
     ? accounts 
     : accounts.filter(a => a.platform === selectedPlatform);
@@ -84,13 +87,8 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
     ? posts 
     : posts.filter(p => p.platform === selectedPlatform);
 
-  // Total Reach of selected posts
   const aggregateReach = filteredPosts.reduce((sum, p) => sum + p.reach, 0);
-
-  // Total interaction metrics (likes + comments + shares)
   const aggregateInteractions = filteredPosts.reduce((sum, p) => sum + p.likes + p.comments + p.shares, 0);
-
-  // Average Engagement Rate
   const averageEngagementRate = filteredPosts.length > 0
     ? parseFloat((filteredPosts.reduce((sum, p) => sum + p.engagementRate, 0) / filteredPosts.length).toFixed(2))
     : 0.00;
@@ -103,24 +101,37 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
     return true;
   };
 
-  // Identify top posts by total engagement
   const sortedPosts = [...filteredPosts]
     .filter(p => matchesDateRange(p.publishedAt))
     .sort((a, b) => (b.likes + b.comments + b.shares) - (a.likes + a.comments + a.shares));
   const topPosts = sortedPosts.slice(0, showAllTopPosts ? 15 : 5);
   const hasMorePosts = sortedPosts.length > 5;
 
-  // Custom styling elements depending on selected platform colors
+  // --- Perbandingan Platform ---
+  const platformStats = ['X', 'YouTube', 'TikTok'].map(p => {
+    const pPosts = posts.filter(pt => pt.platform === p);
+    const pAccs = accounts.filter(a => a.platform === p);
+    return {
+      platform: p,
+      posts: pPosts.length,
+      accounts: pAccs.length,
+      reach: pPosts.reduce((s, pt) => s + pt.reach, 0),
+      interactions: pPosts.reduce((s, pt) => s + pt.likes + pt.comments + pt.shares, 0),
+      engagement: pPosts.length > 0
+        ? parseFloat((pPosts.reduce((s, pt) => s + pt.engagementRate, 0) / pPosts.length).toFixed(2))
+        : 0,
+    };
+  });
+
   const getPlatformColors = (plat: string) => {
     switch (plat) {
-      case 'X': return { text: 'text-zinc-100', border: 'border-zinc-700', bg: 'bg-zinc-950/80', badgeBg: 'bg-zinc-800' };
-      case 'YouTube': return { text: 'text-red-400', border: 'border-red-500/25', bg: 'bg-red-950/20', badgeBg: 'bg-red-500/10' };
-      case 'TikTok': return { text: 'text-cyan-400', border: 'border-cyan-500/25', bg: 'bg-cyan-950/20', badgeBg: 'bg-cyan-500/10' };
-      default: return { text: 'text-amber-500', border: 'border-amber-500/20', bg: 'bg-amber-950/10', badgeBg: 'bg-amber-500/10' };
+      case 'X': return { text: 'text-zinc-100', border: 'border-zinc-700', bg: 'bg-zinc-950/80', badgeBg: 'bg-zinc-800', bar: '#1DA1F2' };
+      case 'YouTube': return { text: 'text-red-400', border: 'border-red-500/25', bg: 'bg-red-950/20', badgeBg: 'bg-red-500/10', bar: '#FF0000' };
+      case 'TikTok': return { text: 'text-cyan-400', border: 'border-cyan-500/25', bg: 'bg-cyan-950/20', badgeBg: 'bg-cyan-500/10', bar: '#00F2EA' };
+      default: return { text: 'text-amber-500', border: 'border-amber-500/20', bg: 'bg-amber-950/10', badgeBg: 'bg-amber-500/10', bar: '#D4AF37' };
     }
   };
 
-  // Custom tooltips styling for dark mode charts
   const CustomChartTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
@@ -136,24 +147,38 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
     return null;
   };
 
+  const CustomBarTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-[#121215] border border-[#D4AF37]/30 p-3.5 rounded-xl shadow-2xl text-left">
+          <p className="text-[10px] font-mono font-bold uppercase text-slate-500 tracking-wider mb-1.5">{label}</p>
+          {payload.map((entry: any, idx: number) => (
+            <p key={idx} className="text-xs text-slate-100 font-semibold flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }}></span>
+              {entry.name}: <span className="font-mono text-[#D4AF37] font-bold">{entry.value.toLocaleString()}</span>
+            </p>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="space-y-8 animate-fade-in text-left pb-10" id="social-dashboard">
       
-      {/* Title block */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-xl lg:text-2xl font-serif text-[#F5F5F5] font-semibold flex items-center gap-2.5">
             <Activity className="w-5 h-5 text-[#D4AF37]" id="title-icon" />
-            Integrasi Multi-Platform & Dashboard Analitik
+            Dashboard Analitik Multi-Platform
           </h2>
           <p className="text-xs text-slate-400 mt-1">
-            Hubungkan akun X, YouTube, dan TikTok API Anda secara aman untuk memonitor jangkauan postingan dan mendeteksi korelasi manipulasi persepsi publik.
+            Pantau jangkauan postingan dan deteksi korelasi manipulasi persepsi publik di seluruh platform.
           </p>
         </div>
-
-        {/* Global Select platform switcher for the dashboard */}
         <div className="flex items-center space-x-2 bg-[#121215] border border-[#2A2A2E] px-2 py-1.5 rounded-xl">
-          <span className="text-[10px] font-mono text-slate-500 font-bold uppercase tracking-wider pl-2.5">Dashboard Focus:</span>
+          <span className="text-[10px] font-mono text-slate-500 font-bold uppercase tracking-wider pl-2.5">Fokus Dashboard:</span>
           {['All', 'X', 'YouTube', 'TikTok'].map((plat) => (
             <button
               key={plat}
@@ -171,7 +196,7 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
         </div>
       </div>
 
-      {/* 1. ACCOUNTS CHANNELS LIST */}
+      {/* 1. STATUS SCRAPER dengan jumlah postingan */}
       <div className="bg-[#15151A] border border-[#2A2A2E] rounded-2xl p-6 relative overflow-hidden" id="accounts-connector-deck">
         <div className="absolute right-3 top-3 opacity-5 pointer-events-none">
           <UserCheck className="w-24 h-24 text-amber-500" />
@@ -181,12 +206,11 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
           <div>
             <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
               <span className="w-1.5 h-3 bg-[#D4AF37] rounded-sm"></span>
-              Status Scraper Platform
+              Status Scraper & Data Tersimpan
             </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">Status koneksi scraper real-time untuk setiap platform media sosial.</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Status koneksi scraper dan jumlah data terkumpul per platform.</p>
           </div>
           
-          {/* Scraper status indicators */}
           <div className="flex items-center gap-2">
             {scraperStatus && (
               <>
@@ -220,6 +244,7 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
             { key: 'tiktok' as const, label: 'TikTok', icon: 'TK' },
           ].map((p) => {
             const connected = scraperStatus?.[p.key] ?? false;
+            const postCount = scraperStatus?.postCounts?.[p.key] ?? 0;
             return (
               <div
                 key={p.key}
@@ -237,71 +262,161 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
                   connected ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-500 bg-slate-800/20'
                 }`}>
                   <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-                  Scraper {connected ? 'Berjalan' : 'Nonaktif'}
+                  {connected ? 'Scraper Aktif' : 'Nonaktif'}
+                </div>
+                <div className="mt-2 text-[10px] text-slate-500 font-mono">
+                  {postCount} postingan
                 </div>
               </div>
             );
           })}
         </div>
+
+        {scraperStatus && (
+          <div className="mt-4 text-[10px] text-slate-600 font-mono flex justify-between items-center border-t border-slate-800/50 pt-3">
+            <span>Total: {scraperStatus.totalPosts ?? 0} postingan, {scraperStatus.totalAccounts ?? 0} akun</span>
+            <span>Sinkronasi terakhir: {new Date(scraperStatus.lastSync).toLocaleString('id-ID')}</span>
+          </div>
+        )}
       </div>
 
-      {/* 2. CORE AGGREGATE DASHBOARD METRICS */}
+      {/* 2. METRIK UTAMA */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" id="aggregate-metrics-cards">
         <div className="bg-[#15151A] border border-[#2A2A2E] p-4 rounded-xl flex flex-col justify-between">
-          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Connected Accounts</span>
+          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Akun Terhubung</span>
           <div className="flex items-baseline space-x-1.5 mt-2.5">
             <span className="text-2xl font-serif text-[#D4AF37] font-bold" id="metric-accounts-count">{filteredAccounts.length}</span>
-            <span className="text-[10.5px] text-slate-500 font-mono">active channels</span>
+            <span className="text-[10.5px] text-slate-500 font-mono">akun aktif</span>
           </div>
         </div>
         
         <div className="bg-[#15151A] border border-[#2A2A2E] p-4 rounded-xl flex flex-col justify-between">
-          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Est. Audience Reach</span>
+          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Jangkauan Audiens</span>
           <div className="flex items-baseline space-x-1.5 mt-2.5">
             <span className="text-2xl font-serif text-[#D4AF37] font-bold" id="metric-total-reach">{aggregateReach.toLocaleString()}</span>
-            <span className="text-[10.5px] text-slate-500 font-mono">impressions</span>
+            <span className="text-[10.5px] text-slate-500 font-mono">impresi</span>
           </div>
         </div>
 
         <div className="bg-[#15151A] border border-[#2A2A2E] p-4 rounded-xl flex flex-col justify-between">
-          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Average Engagement</span>
+          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Rata-rata Engagement</span>
           <div className="flex items-baseline space-x-1.5 mt-2.5">
             <span className="text-2xl font-serif text-[#D4AF37] font-bold" id="metric-avg-engagement">{averageEngagementRate}%</span>
-            <span className="text-[10.5px] text-slate-500 font-mono">rating score</span>
+            <span className="text-[10.5px] text-slate-500 font-mono">skor rating</span>
           </div>
         </div>
 
         <div className="bg-[#15151A] border border-[#2A2A2E] p-4 rounded-xl flex flex-col justify-between">
-          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Aggregate Interactions</span>
+          <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold tracking-wider">Total Interaksi</span>
           <div className="flex items-baseline space-x-1.5 mt-2.5">
             <span className="text-2xl font-serif text-[#D4AF37] font-bold" id="metric-total-reactions">{aggregateInteractions.toLocaleString()}</span>
-            <span className="text-[10.5px] text-slate-500 font-mono">actions logged</span>
+            <span className="text-[10.5px] text-slate-500 font-mono">aksi tercatat</span>
           </div>
         </div>
       </div>
 
-      {/* 3. CHART & TOP 5 POSTS */}
+      {/* 3. PERBANDINGAN PLATFORM SIDE-BY-SIDE */}
+      <div className="bg-[#15151A] border border-[#2A2A2E] rounded-2xl p-6 relative overflow-hidden" id="platform-comparison">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-[#D4AF37]/5 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none"></div>
+        
+        <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-6 relative">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-[#D4AF37]/10 rounded-lg">
+              <BarChart3 className="w-5 h-5 text-[#D4AF37]" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-100 tracking-tight">Perbandingan Multi-Platform</h3>
+              <p className="text-[10px] text-slate-500 font-mono">Analisis komparatif aktivitas antar saluran media sosial</p>
+            </div>
+          </div>
+          <div className="px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-[9px] font-mono text-slate-400">
+            RADAR ACTIVE
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+          {/* Chart Section */}
+          <div className="lg:col-span-7 h-72 w-full relative">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={platformStats} margin={{ top: 20, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#222" vertical={false} />
+                <XAxis dataKey="platform" stroke="#444" fontSize={10} fontFamily="monospace" axisLine={false} tickLine={false} />
+                <YAxis stroke="#444" fontSize={9} fontFamily="monospace" axisLine={false} tickLine={false} />
+                <Tooltip content={<CustomBarTooltip />} cursor={{fill: '#1A1A1F'}} />
+                <Legend 
+                  wrapperStyle={{ fontSize: '10px', fontFamily: 'monospace', paddingTop: '20px' }} 
+                  iconType="circle"
+                />
+                <Bar dataKey="posts" name="Postingan" fill="#D4AF37" radius={[6, 6, 0, 0]} barSize={24} />
+                <Bar dataKey="accounts" name="Akun" fill="#1DA1F2" radius={[6, 6, 0, 0]} barSize={24} />
+                <Bar dataKey="interactions" name="Interaksi" fill="#FF0000" radius={[6, 6, 0, 0]} barSize={24} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Cards Section */}
+          <div className="lg:col-span-5 grid grid-cols-1 gap-4">
+            {platformStats.map(ps => {
+              const colors = getPlatformColors(ps.platform);
+              return (
+                <div key={ps.platform} className={`group relative bg-[#0F0F12] border ${colors.border} hover:border-[#D4AF37]/40 rounded-2xl p-4 transition-all duration-300 hover:shadow-2xl hover:shadow-[#D4AF37]/5`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xs font-mono font-bold ${colors.bg} ${colors.text} border ${colors.border}`}>
+                        {ps.platform === 'YouTube' ? 'YT' : ps.platform === 'TikTok' ? 'TK' : '𝕏'}
+                      </div>
+                      <div>
+                        <h4 className={`text-sm font-bold text-slate-100`}>{ps.platform}</h4>
+                        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">Channel Monitor</span>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-bold text-[#D4AF37] font-mono">{ps.engagement}%</p>
+                      <span className="text-[8px] font-mono text-slate-600 uppercase">Eng. Rate</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 border-t border-slate-800/50 pt-3">
+                    <div className="text-center">
+                      <span className="text-[8px] text-slate-500 uppercase font-bold block mb-0.5">Posts</span>
+                      <p className="text-slate-200 font-mono text-xs">{ps.posts.toLocaleString()}</p>
+                    </div>
+                    <div className="text-center border-x border-slate-800/50">
+                      <span className="text-[8px] text-slate-500 uppercase font-bold block mb-0.5">Reach</span>
+                      <p className="text-slate-200 font-mono text-xs">{ps.reach >= 1000 ? (ps.reach / 1000).toFixed(1) + 'k' : ps.reach}</p>
+                    </div>
+                    <div className="text-center">
+                      <span className="text-[8px] text-slate-500 uppercase font-bold block mb-0.5">Acts</span>
+                      <p className="text-slate-200 font-mono text-xs">{ps.interactions >= 1000 ? (ps.interactions / 1000).toFixed(1) + 'k' : ps.interactions}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 4. GRAFIK TREN & TOP POSTINGAN */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="dashboard-core-visualization">
         
-        {/* Left 8 columns: Timeseries metrics chart */}
         <div className="lg:col-span-8 bg-[#15151A] border border-[#2A2A2E] rounded-2xl p-5 lg:p-6 flex flex-col justify-between" id="engagement-time-chart-container">
           <div>
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 border-b border-slate-800 pb-4 mb-5">
               <div>
                 <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                   <span className="w-1.5 h-3 bg-[#D4AF37] rounded-sm"></span>
-                  Gagasan Keterlibatan Historis (Timeline Tren)
+                  Tren Keterlibatan Historis
                 </h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">Analisis tren interaksi harian dari seluruh postingan akun terkoneksi.</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Analisis tren interaksi harian dari seluruh postingan.</p>
               </div>
 
-              {/* Chart Metric Selection Toggle Toggles */}
               <div className="flex items-center space-x-1 bg-slate-950 border border-slate-800 p-1 rounded-lg">
                 {[
-                  { id: 'likes', label: 'Likes' },
-                  { id: 'comments', label: 'Comments' },
-                  { id: 'shares', label: 'Shares' },
-                  { id: 'reach', label: 'Reach' }
+                  { id: 'likes', label: 'Suka' },
+                  { id: 'comments', label: 'Komentar' },
+                  { id: 'shares', label: 'Bagikan' },
+                  { id: 'reach', label: 'Jangkauan' }
                 ].map((met) => (
                   <button
                     key={met.id}
@@ -319,7 +434,6 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
               </div>
             </div>
 
-            {/* Recharts responsive area container */}
             <div className="h-72 w-full" id="timeline-chart">
               {timeline.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
@@ -359,33 +473,32 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
                 </ResponsiveContainer>
               ) : (
                 <div className="h-full flex items-center justify-center text-slate-600 text-xs font-mono uppercase">
-                  Data feed unavailable. Connect a profile first.
+                  Data belum tersedia. Hubungkan profil terlebih dahulu.
                 </div>
               )}
             </div>
           </div>
 
           <div className="pt-4 border-t border-slate-900 mt-4 text-[10.5px] text-slate-500 flex items-center justify-between font-mono">
-            <span>METRIC MATRIX TIMEFRAME: L-14 DAYS</span>
-            <span>SYSTEM CONVERSION EXTRAPOLATION: SECURE ON-CHAIN</span>
+            <span>RENTANG WAKTU: 14 HARI TERAKHIR</span>
+            <span>DATA TERCATAT OLEH SISTEM</span>
           </div>
         </div>
 
-        {/* Right 4 columns: Top 5 posts listed */}
         <div className="lg:col-span-4 bg-[#15151A] border border-[#2A2A2E] rounded-2xl p-5 lg:p-6 flex flex-col justify-between" id="top-posts-feed-container">
           <div>
             <div className="border-b border-slate-800 pb-4 mb-4">
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 <span className="w-1.5 h-3 bg-[#D4AF37] rounded-sm"></span>
-                Top Postings ({showAllTopPosts ? '15' : '5'}) — {selectedPlatform}
+                Postingan Teratas ({showAllTopPosts ? '15' : '5'}) — {selectedPlatform}
               </h3>
-              <p className="text-[11px] text-slate-500 mt-0.5">Postingan tersaring dengan volume interaksi agregat terbanyak.</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Postingan dengan interaksi terbanyak.</p>
             </div>
 
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
               {topPosts.length === 0 ? (
                 <div className="py-12 text-center text-slate-500 text-xs">
-                  No social posts captured. Connect profiles to load posts.
+                  Belum ada postingan. Hubungkan profil untuk memuat data.
                 </div>
               ) : (
                 topPosts.map((post, index) => {
@@ -396,7 +509,6 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
                       className="p-3 bg-slate-950/60 border border-slate-900 rounded-xl leading-relaxed text-xs relative hover:border-slate-800 transition"
                       id={`top-post-card-${post.id}`}
                     >
-                      {/* Ranking badge */}
                       <span className="absolute top-2.5 right-2 text-[10px] font-mono font-black text-[#D4AF37] bg-[#D4AF37]/10 w-5 h-5 rounded-full flex items-center justify-center border border-amber-500/20">
                         #{index + 1}
                       </span>
@@ -420,19 +532,18 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
                       <p className="text-slate-300 text-[11.5px] line-clamp-2 mb-2 leading-relaxed font-sans">{post.text}</p>
                       
                       <div className="flex justify-between items-center text-[10px] font-mono text-slate-500 pt-2 border-t border-slate-900/60">
-                        {/* Compact metrics info */}
                         <div className="flex items-center space-x-2">
-                          <span className="flex items-center gap-0.5" title="Likes">
+                          <span className="flex items-center gap-0.5" title="Suka">
                             <ThumbsUp className="w-3 h-3 text-zinc-600" /> {post.likes}
                           </span>
-                          <span className="flex items-center gap-0.5" title="Comments">
+                          <span className="flex items-center gap-0.5" title="Komentar">
                             <MessageSquare className="w-3 h-3 text-zinc-600" /> {post.comments}
                           </span>
-                          <span className="flex items-center gap-0.5" title="Reaction/Shares">
+                          <span className="flex items-center gap-0.5" title="Bagikan">
                             <Share2 className="w-3 h-3 text-zinc-600" /> {post.shares}
                           </span>
                         </div>
-                        <span className="text-[10px] font-bold text-[#D4AF37]">{aggregateEng.toLocaleString()} acts</span>
+                        <span className="text-[10px] font-bold text-[#D4AF37]">{aggregateEng.toLocaleString()} aksi</span>
                       </div>
                     </div>
                   );
@@ -451,36 +562,35 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
           </div>
 
           <div className="pt-3 border-t border-slate-900 mt-4 text-[10.5px] text-slate-500 font-mono text-center">
-            Penyaringan dihitung otomatis berdasarkan: (likes+comments+shares)
+            Penyaringan berdasarkan: (suka + komentar + bagikan)
           </div>
         </div>
 
       </div>
 
-      {/* 4. AUDIENCE DEMOGRAPHICS SUMMARY */}
+      {/* 5. DEMOGRAFI AUDIENS */}
       <div className="bg-[#15151A] border border-[#2A2A2E] rounded-2xl p-6 relative overflow-hidden" id="audience-demographics-container">
         
         <div className="flex justify-between items-center border-b border-slate-800 pb-4 mb-5">
           <div>
             <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
               <span className="w-1.5 h-3 bg-[#D4AF37] rounded-sm"></span>
-              Profil & Demografi Audiens Terbuka ({selectedPlatform} Platform)
+              Profil & Demografi Audiens ({selectedPlatform})
             </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">Proporsi segmentasi usia, gender, dan sebaran wilayah pengkutkut yang direkaput oleh API.</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Proporsi usia, gender, dan sebaran wilayah dari data scraper.</p>
           </div>
           
           <div className="text-[10px] font-mono text-slate-500 flex items-center gap-1.5 bg-slate-950 px-2 py-1 rounded">
-            <Info className="w-3.5 h-3.5 text-zinc-500" /> Securing API Metadata Access
+            <Info className="w-3.5 h-3.5 text-zinc-500" /> Data dari scraping langsung
           </div>
         </div>
 
         {demographics ? (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             
-            {/* Age groups indicator */}
             <div className="space-y-4">
               <h4 className="text-[11.5px] font-mono uppercase tracking-wider text-slate-400 font-bold flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                <Users className="w-4 h-4 text-amber-500 stroke-1.5" /> Segmentasi Kelompok Usia (%)
+                <Users className="w-4 h-4 text-amber-500 stroke-1.5" /> Usia (%)
               </h4>
               <div className="space-y-3.5">
                 {demographics.ageBreakdown.map((seg) => (
@@ -500,16 +610,15 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
               </div>
             </div>
 
-            {/* Gender groups indicator */}
             <div className="space-y-4">
               <h4 className="text-[11.5px] font-mono uppercase tracking-wider text-slate-400 font-bold flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                <UserCheck className="w-4 h-4 text-emerald-500 stroke-1.5" /> Distribusi Gender (%)
+                <UserCheck className="w-4 h-4 text-emerald-500 stroke-1.5" /> Gender (%)
               </h4>
               <div className="space-y-4 pt-2">
                 {demographics.genderBreakdown.map((seg) => (
                   <div key={seg.category} className="p-3.5 bg-slate-900/40 border border-slate-900 rounded-xl relative overflow-hidden" id={`demo-gender-${seg.category.toLowerCase()}`}>
                     <div className="flex justify-between items-center text-xs">
-                      <span className="font-semibold text-slate-300">{seg.category === 'Male' ? 'Laki-laki (Male)' : seg.category === 'Female' ? 'Perempuan (Female)' : 'Lainnya (Non-binary)'}</span>
+                      <span className="font-semibold text-slate-300">{seg.category === 'Male' ? 'Laki-laki' : seg.category === 'Female' ? 'Perempuan' : 'Lainnya'}</span>
                       <span className="font-mono font-bold text-sm text-[#D4AF37]">{seg.value}%</span>
                     </div>
                     <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden mt-2.5 border border-slate-900">
@@ -527,10 +636,9 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
               </div>
             </div>
 
-            {/* Region Sebaran Geografis indicator */}
             <div className="space-y-4">
               <h4 className="text-[11.5px] font-mono uppercase tracking-wider text-slate-400 font-bold flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                <MapPin className="w-4 h-4 text-violet-500 stroke-1.5" /> Sebaran Geografis Teratas
+                <MapPin className="w-4 h-4 text-violet-500 stroke-1.5" /> Wilayah Teratas
               </h4>
               <div className="space-y-3">
                 {demographics.regionBreakdown.map((seg, idx) => (
@@ -548,7 +656,7 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
           </div>
         ) : (
           <div className="py-20 text-center text-slate-500 text-xs font-mono">
-            Demographic profiling is loading or unavailable. Use the API connectors to register feed data channels.
+            Data demografi sedang dimuat atau tidak tersedia. Gunakan konektor API untuk mendaftarkan saluran data.
           </div>
         )}
       </div>

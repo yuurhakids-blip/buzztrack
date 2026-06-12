@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { NetworkNode, NetworkLink } from '../types';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { NetworkNode, NetworkLink } from '../core/domain/entities/index.ts';
 import { api } from '../api';
-import { Shield, AlertTriangle, Radio, Hash, UserCheck, HelpCircle, ExternalLink } from 'lucide-react';
+import { HelpCircle, ExternalLink, BrainCircuit, RefreshCw } from 'lucide-react';
+import { AIService } from '../infrastructure/services/AIService';
 
 interface NetworkGraphProps {
   onSelectNode?: (nodeId: string, label: string, botScore?: number) => void;
@@ -19,12 +20,50 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [isClustering, setIsClustering] = useState(false);
+  const [clusteringMode, setClusteringMode] = useState<'AI' | 'Heuristic' | null>(null);
   const nodeRef = React.useRef<HTMLDivElement>(null);
+
+  const runClustering = async () => {
+    if (nodes.length === 0) return;
+    setIsClustering(true);
+    try {
+      const provider = (localStorage.getItem('selectedProvider') as any) || 'Gemini';
+      const config = {
+        provider,
+        model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+        apiKey: localStorage.getItem(`api-key-${provider}`) || ''
+      };
+      
+      const result = await AIService.clusterNetwork(nodes, links, config, platformFilter);
+      setClusteringMode(result.mode);
+      
+      if (result && result.clusters) {
+        const clusterMap: Record<string, string> = {};
+        result.clusters.forEach((c: any) => {
+          c.nodeIds.forEach((id: string) => clusterMap[id] = c.clusterId);
+        });
+        
+        setNodes(prev => prev.map(n => ({
+          ...n,
+          clusterId: clusterMap[n.id] || undefined
+        })));
+        console.log(`${result.mode} Clustering Success:`, result.clusters);
+      }
+    } catch (err) {
+      console.error("Clustering failed:", err);
+      setClusteringMode('Heuristic');
+    } finally {
+      setIsClustering(false);
+    }
+  };
 
   useEffect(() => {
     api.network.get()
       .then(data => {
         if (data.nodes) {
+          const groups = [...new Set(data.nodes.map((n: NetworkNode) => n.group))];
+          console.log('[NetworkGraph] groups:', groups, 'count:', data.nodes.length);
           setNodes(data.nodes);
           setLinks(data.links || []);
           const mainHub = data.nodes.find((n: NetworkNode) => n.id === 'narrative-main');
@@ -49,57 +88,94 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
       });
   }, [reloadTrigger]);
 
-  // SVG Dimension Constants — larger canvas for expanded coordination map
-  const width = 800;
-  const height = 500;
+  // SVG Dimension Constants
+  const width = 1200;
+  const height = 850;
 
-  // Manual structured layout positions for nodes to keep them beautiful, balanced, and responsive in React without non-deterministic layout bugs
-  const positions: Record<string, { x: number; y: number }> = {
-    // Central campaign hub
-    'narrative-main': { x: 400, y: 250 },
-    // Buzzer masters (3)
-    'master-1': { x: 250, y: 180 },
-    'master-2': { x: 550, y: 180 },
-    'master-3': { x: 400, y: 120 },
-    // Hashtag nodes (6)
-    'hash-1': { x: 200, y: 340 },
-    'hash-2': { x: 600, y: 340 },
-    'hash-3': { x: 300, y: 70 },
-    'hash-4': { x: 500, y: 70 },
-    'hash-5': { x: 130, y: 250 },
-    'hash-6': { x: 670, y: 250 },
-    // Bot nodes related to X platform (left cluster)
-    'bot-1': { x: 80, y: 180 },
-    'bot-2': { x: 110, y: 310 },
-    'bot-3': { x: 160, y: 420 },
-    'bot-4': { x: 200, y: 470 },
-    'bot-5': { x: 60, y: 380 },
-    'bot-6': { x: 140, y: 130 },
-    'bot-7': { x: 270, y: 50 },
-    // Bot nodes related to YouTube platform (right cluster)
-    'bot-8': { x: 660, y: 130 },
-    'bot-9': { x: 640, y: 310 },
-    'bot-10': { x: 700, y: 380 },
-    'bot-11': { x: 730, y: 180 },
-    'bot-12': { x: 580, y: 420 },
-    'bot-13': { x: 690, y: 460 },
-    // Bot nodes — TikTok / cross-platform (bottom area)
-    'bot-14': { x: 330, y: 440 },
-    'bot-15': { x: 470, y: 440 },
-    'bot-16': { x: 380, y: 370 },
-    'bot-17': { x: 520, y: 370 },
-    'bot-18': { x: 260, y: 390 },
-    'bot-19': { x: 540, y: 480 },
-    'bot-20': { x: 420, y: 490 },
-    // Platform sub-hubs (X / YouTube / TikTok grouping nodes)
-    'platform-x': { x: 130, y: 80 },
-    'platform-youtube': { x: 670, y: 80 },
-    'platform-tiktok': { x: 400, y: 30 },
-  };
+  // Force-directed layout: nodes repel, edges attract, settles into organic shape
+  const computedPositions = useMemo(() => {
+    const pos: Record<string, { x: number; y: number }> = {};
+    const vel: Record<string, { x: number; y: number }> = {};
+    const nodeIds = nodes.map(n => n.id);
+    if (nodeIds.length === 0) return pos;
+
+    // Initialize in a centered cloud
+    const angleStep = (2 * Math.PI) / nodeIds.length;
+    nodeIds.forEach((id, i) => {
+      pos[id] = { x: width / 2 + 160 * Math.cos(angleStep * i), y: height / 2 + 100 * Math.sin(angleStep * i) };
+      vel[id] = { x: 0, y: 0 };
+    });
+
+    const REP = 6000;    // repulsion strength
+    const ATT = 0.005;   // attraction strength
+    const GRAV = 0.001;  // center gravity
+    const DAMP = 0.85;   // velocity damping
+    const MIN_D = 30;    // minimum distance
+
+    for (let iter = 0; iter < 150; iter++) {
+      // Reset forces
+      const forces: Record<string, { x: number; y: number }> = {};
+      nodeIds.forEach(id => { forces[id] = { x: 0, y: 0 }; });
+
+      // Repulsion between all pairs
+      for (let i = 0; i < nodeIds.length; i++) {
+        for (let j = i + 1; j < nodeIds.length; j++) {
+          const a = nodeIds[i], b = nodeIds[j];
+          let dx = pos[b].x - pos[a].x;
+          let dy = pos[b].y - pos[a].y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < MIN_D) dist = MIN_D;
+          const force = REP / (dist * dist);
+          const fx = force * (dx / dist);
+          const fy = force * (dy / dist);
+          forces[a].x -= fx; forces[a].y -= fy;
+          forces[b].x += fx; forces[b].y += fy;
+        }
+      }
+
+      // Attraction along edges
+      links.forEach(l => {
+        const src = typeof l.source === 'string' ? l.source : l.source.id;
+        const tgt = typeof l.target === 'string' ? l.target : l.target.id;
+        if (!pos[src] || !pos[tgt]) return;
+        let dx = pos[tgt].x - pos[src].x;
+        let dy = pos[tgt].y - pos[src].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const force = ATT * Math.max(0, dist - 150);
+        const fx = force * (dx / (dist || 1));
+        const fy = force * (dy / (dist || 1));
+        forces[src].x += fx; forces[src].y += fy;
+        forces[tgt].x -= fx; forces[tgt].y -= fy;
+      });
+
+      // Center gravity
+      nodeIds.forEach(id => {
+        forces[id].x += GRAV * (width / 2 - pos[id].x);
+        forces[id].y += GRAV * (height / 2 - pos[id].y);
+      });
+
+      // Apply forces with damping
+      nodeIds.forEach(id => {
+        vel[id].x = (vel[id].x + forces[id].x) * DAMP;
+        vel[id].y = (vel[id].y + forces[id].y) * DAMP;
+        pos[id].x += vel[id].x;
+        pos[id].y += vel[id].y;
+        // Clamp to canvas
+        pos[id].x = Math.max(40, Math.min(width - 40, pos[id].x));
+        pos[id].y = Math.max(40, Math.min(height - 40, pos[id].y));
+      });
+    }
+
+    return pos;
+  }, [nodes, links]);
+
+  const getNodePosition = useCallback((node: NetworkNode): { x: number; y: number } | null => {
+    return computedPositions[node.id] || null;
+  }, [computedPositions]);
 
   const filteredNodes = nodes.filter(node => {
     if (platformFilter === 'All') return true;
-    if (!node.platform) return true; // Keep campaign/hashtag central nodes
+    if (!node.platform) return true;
     return node.platform === platformFilter;
   });
 
@@ -115,39 +191,94 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
     }
   };
 
-  const getGroupColor = (group: string, score?: number, platform?: string) => {
-    if (group === 'campaign') return 'fill-indigo-500 stroke-indigo-300';
-    if (group === 'platform_hub') {
-      if (platform === 'X') return 'fill-sky-500 stroke-sky-300';
-      if (platform === 'YouTube') return 'fill-red-500 stroke-red-300';
-      if (platform === 'TikTok') return 'fill-cyan-500 stroke-cyan-300';
-      return 'fill-purple-500 stroke-purple-300';
-    }
-    if (group === 'hashtag') return 'fill-teal-500 stroke-teal-300';
-    if (group === 'buzzer_master') {
-      if (score && score > 80) return 'fill-rose-500 stroke-rose-300';
-      return 'fill-orange-400 stroke-orange-200';
-    }
-    // bot node with platform-flavored fill
-    const base = score && score > 90 ? ' fill-red-600 stroke-red-400'
-      : score && score > 75 ? ' fill-red-400 stroke-red-200'
-      : ' fill-yellow-500 stroke-yellow-300';
-    if (platform === 'X') return 'fill-cyan-800 stroke-cyan-500' + base.slice(base.lastIndexOf(';'));
-    return base;
+  // High-contrast intuitive palette — brand-accurate for platforms, distinct for actors
+  const groupColors = {
+    campaign: { fill: '#FFC107', stroke: '#FFE082' },
+    platform_x: { fill: '#1DA1F2', stroke: '#6CBDF5' },
+    platform_youtube: { fill: '#FF0000', stroke: '#FF5353' },
+    platform_tiktok: { fill: '#00F2EA', stroke: '#4DF8F0' },
+    hashtag: { fill: '#84CC16', stroke: '#A3E635' },
+    buzzer_master: { fill: '#D946EF', stroke: '#E879F9' },
+    buzzer_high: { fill: '#F97316', stroke: '#FB923C' },
+    buzzer_med: { fill: '#EAB308', stroke: '#FACC15' },
+    buzzer_low: { fill: '#64748B', stroke: '#94A3B8' },
   };
 
-  const getIconForGroup = (group: string, score?: number, platform?: string) => {
-    if (group === 'campaign') return <Radio className="w-5 h-5 text-indigo-400" />;
+  const getGroupStyle = (group: string, score?: number, platform?: string) => {
+    if (group === 'campaign') return groupColors.campaign;
     if (group === 'platform_hub') {
-      if (platform === 'X') return <span className="text-[10px] font-black text-sky-300">X</span>;
-      if (platform === 'YouTube') return <span className="text-[10px] font-black text-red-300">YT</span>;
-      if (platform === 'TikTok') return <span className="text-[10px] font-black text-cyan-300">TK</span>;
+      if (platform === 'X') return groupColors.platform_x;
+      if (platform === 'YouTube') return groupColors.platform_youtube;
+      if (platform === 'TikTok') return groupColors.platform_tiktok;
+      return { fill: '#888888', stroke: '#AAAAAA' };
     }
-    if (group === 'hashtag') return <Hash className="w-5 h-5 text-teal-400" />;
-    if (group === 'buzzer_master') return <AlertTriangle className="w-5 h-5 text-orange-400" id="icon-warning-master" />;
-    if (score && score > 85) return <Shield className="w-5 h-5 text-red-500" />;
-    return <UserCheck className="w-5 h-5 text-yellow-400" />;
+    if (group === 'hashtag') return groupColors.hashtag;
+    if (group === 'buzzer_master') return groupColors.buzzer_master;
+    if (group === 'buzzer') {
+      if (score && score > 80) return groupColors.buzzer_high;
+      if (score && score > 50) return groupColors.buzzer_med;
+      return groupColors.buzzer_low;
+    }
+    return { fill: '#888888', stroke: '#AAAAAA' };
   };
+
+  // Mini SVG shapes matching actual node shapes — used in both legend & detail panel
+  const MiniNodeShape = ({ group, fill, stroke, size = 20, platform }: { group: string; fill: string; stroke: string; size?: number; platform?: string }) => {
+    const s = size / 2;
+    if (group === 'campaign') return (
+      <svg width={size} height={size} viewBox="0 0 22 22">
+        <circle cx="11" cy="11" r="9" fill={fill} stroke={stroke} strokeWidth="2" />
+        <circle cx="11" cy="11" r="5" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1.2" />
+        <circle cx="11" cy="11" r="2.5" fill="#fff" />
+      </svg>
+    );
+    if (group === 'platform_hub') {
+      const letter = platform === 'X' ? 'X' : platform === 'YouTube' ? 'YT' : platform === 'TikTok' ? 'TK' : '?';
+      return (
+        <svg width={size} height={size} viewBox="0 0 22 22">
+          <polygon points="11,2 20,11 11,20 2,11" fill={fill} stroke={stroke} strokeWidth="2" />
+          <text x="11" y="13" textAnchor="middle" fontSize="7" fontWeight="bold" fill="#fff" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>{letter}</text>
+        </svg>
+      );
+    }
+    if (group === 'hashtag') return (
+      <svg width={size} height={size} viewBox="0 0 22 22">
+        <rect x="2.5" y="2.5" width="17" height="17" rx="4" fill={fill} stroke={stroke} strokeWidth="2" />
+        <text x="11" y="14" textAnchor="middle" fontSize="9" fontWeight="bold" fill="#fff">#</text>
+      </svg>
+    );
+    if (group === 'buzzer_master') return (
+      <svg width={size} height={size} viewBox="0 0 22 22">
+        <polygon points="11,2 20,20 2,20" fill={fill} stroke={stroke} strokeWidth="2" />
+        <text x="11" y="15" textAnchor="middle" fontSize="8" fontWeight="bold" fill="#fff">!</text>
+      </svg>
+    );
+    if (group === 'buzzer') return (
+      <svg width={size} height={size} viewBox="0 0 22 22">
+        <circle cx="11" cy="11" r="8.5" fill={fill} stroke={stroke} strokeWidth="2" strokeDasharray="3 2.5" />
+      </svg>
+    );
+    return <svg width={size} height={size} viewBox="0 0 22 22"><circle cx="11" cy="11" r="8" fill={fill} /></svg>;
+  };
+
+  const legendItems: any[] = [
+    { key: 'NARASI', isHeader: true },
+    { key: 'Campaign', group: 'campaign', ...groupColors.campaign, desc: 'Pusat kampanye', platform: '' },
+    { key: 'Hashtag', group: 'hashtag', ...groupColors.hashtag, desc: 'Topik yg dimanfaatkan', platform: '' },
+    { key: 'PLATFORM', isHeader: true },
+    { key: 'X Hub', group: 'platform_hub', ...groupColors.platform_x, desc: 'X / Twitter', platform: 'X' },
+    { key: 'YT Hub', group: 'platform_hub', ...groupColors.platform_youtube, desc: 'YouTube', platform: 'YouTube' },
+    { key: 'TK Hub', group: 'platform_hub', ...groupColors.platform_tiktok, desc: 'TikTok', platform: 'TikTok' },
+    { key: 'AKTOR', isHeader: true },
+    { key: 'Master', group: 'buzzer_master', ...groupColors.buzzer_master, desc: 'Orkestrator', platform: '' },
+    { key: 'Buzzer >80', group: 'buzzer', ...groupColors.buzzer_high, desc: 'Skor tinggi', platform: '' },
+    { key: 'Buzzer 50-80', group: 'buzzer', ...groupColors.buzzer_med, desc: 'Skor sedang', platform: '' },
+    { key: 'Buzzer <50', group: 'buzzer', ...groupColors.buzzer_low, desc: 'Skor rendah', platform: '' },
+  ];
+
+  const GroupMiniShape = ({ group, fill, stroke, platform }: { group: string; fill: string; stroke: string; platform?: string }) => (
+    <MiniNodeShape group={group} fill={fill} stroke={stroke} platform={platform} />
+  );
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-slate-900/60 backdrop-blur-md rounded-2xl border border-slate-800 p-6 shadow-2xl overflow-hidden" id="network-container">
@@ -160,31 +291,52 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
               Live Multiplatform Coordination Map
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Showing linked botnets, topic nodes, and coordinators targeting trending hashtags. Hover on elements to focus connections.
+              Showing linked buzzer networks, topic nodes, and coordinators targeting trending hashtags. Hover on elements to focus connections.
             </p>
           </div>
-          <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
-            {['All', 'X', 'TikTok', 'YouTube'].map((plat) => (
+            <div className="flex gap-2 items-center">
               <button
-                key={plat}
-                id={`btn-filter-${plat.toLowerCase()}`}
-                onClick={() => setPlatformFilter(plat)}
-                className={`px-2.5 py-1 text-xs font-semibold rounded-md transition ${
-                  platformFilter === plat
-                    ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                onClick={runClustering}
+                disabled={isClustering}
+                className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono font-bold rounded-lg border transition ${
+                  isClustering 
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-500 animate-pulse' 
+                    : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20'
                 }`}
               >
-                {plat}
+                {isClustering ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BrainCircuit className="w-3.5 h-3.5" />}
+                {isClustering ? 'AI ANALYSING...' : 'AI CLUSTER GRAPH'}
               </button>
-            ))}
-          </div>
+              {clusteringMode && (
+                <span className={`text-[9px] px-2 py-0.5 rounded-full font-mono font-bold ${
+                  clusteringMode === 'AI' ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                }`}>
+                  Mode: {clusteringMode}
+                </span>
+              )}
+              <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                {['All', 'X', 'TikTok', 'YouTube'].map((plat) => (
+                  <button
+                    key={plat}
+                    id={`btn-filter-${plat.toLowerCase()}`}
+                    onClick={() => setPlatformFilter(plat)}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-md transition ${
+                      platformFilter === plat
+                        ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    {plat}
+                  </button>
+                ))}
+              </div>
+            </div>
         </div>
 
         {/* SVG Drawing Canvas */}
         <div
           ref={nodeRef}
-          className="relative w-full bg-slate-950/80 rounded-xl border border-slate-900 overflow-hidden h-[480px] select-none"
+          className="relative w-full bg-slate-950/80 rounded-xl border border-slate-900 overflow-hidden h-[700px] select-none"
           onMouseDown={(e) => {
             if ((e.target as HTMLElement).closest('svg') || e.target === nodeRef.current) {
               setIsDragging(true);
@@ -210,28 +362,22 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
             style={{ width, height }}
             id="network-svg"
           >
-            {/* Defs for gradients & patterns */}
+            {/* Defs */}
             <defs>
-              <radialGradient id="hubbg" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="#6366f1" stopOpacity="0.4" />
-                <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
-              </radialGradient>
               <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
                 <feGaussianBlur stdDeviation="4" result="blur" />
                 <feComposite in="SourceGraphic" in2="blur" operator="over" />
               </filter>
             </defs>
 
-            {/* Hub ambient glow */}
-            <circle cx="400" cy="250" r="180" fill="url(#hubbg)" className="pointer-events-none" />
-            <circle cx="130" cy="80" r="60" fill="url(#hubbg)" className="pointer-events-none" opacity="0.5" />
-            <circle cx="670" cy="80" r="60" fill="url(#hubbg)" className="pointer-events-none" opacity="0.5" />
-            <circle cx="400" cy="30" r="60" fill="url(#hubbg)" className="pointer-events-none" opacity="0.5" />
+
 
             {/* Connection Links */}
             {filteredLinks.map((link, idx) => {
-              const srcPos = positions[link.source];
-              const tgtPos = positions[link.target];
+              const srcNode = nodes.find(n => n.id === link.source);
+              const tgtNode = nodes.find(n => n.id === link.target);
+              const srcPos = srcNode ? getNodePosition(srcNode) : null;
+              const tgtPos = tgtNode ? getNodePosition(tgtNode) : null;
               if (!srcPos || !tgtPos) return null;
 
               const isLinkHighlighted = 
@@ -270,7 +416,7 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
 
             {/* Drawing Nodes */}
             {filteredNodes.map((node) => {
-              const pos = positions[node.id];
+              const pos = getNodePosition(node);
               if (!pos) return null;
 
               const isSelected = selectedNode?.id === node.id;
@@ -298,21 +444,119 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
                     />
                   )}
 
-                  {/* Node fill body */}
-                  <circle
-                    r={isSelected ? node.size + 3 : node.size}
-                    className={`transition-all duration-300 stroke-[2px] ${getGroupColor(node.group, node.botScore, node.platform)} ${
-                      isSelected || isHovered || isRelated ? 'opacity-100' : 'opacity-85'
-                    }`}
-                  />
+                  {/* Node fill body — distinct shapes per group */}
+                  {(() => {
+                    const c = getGroupStyle(node.group, node.botScore, node.platform);
+                    const r = isSelected ? Math.max(node.size, 10) + 4 : Math.max(node.size, 8);
+                    const opacity = isSelected || isHovered || isRelated ? '1' : '0.85';
 
-                  {/* Interactive inner label or identifier */}
-                  {node.group === 'campaign' && (
-                    <circle r="4" fill="#ffffff" className="animate-ping" />
-                  )}
+                    if (node.group === 'campaign') {
+                      // Concentric circle for campaign/narrative hubs
+                      return (
+                        <g opacity={opacity}>
+                          <circle r={r} fill={c.fill} stroke={c.stroke} strokeWidth="2.5" />
+                          <circle r={r * 0.6} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1" />
+                          <circle r="3" fill="#fff" />
+                        </g>
+                      );
+                    }
+
+                    if (node.group === 'platform_hub') {
+                      // Diamond shape with platform letter inside
+                      const s = r * 1.2;
+                      const letter = node.platform === 'X' ? 'X' : node.platform === 'YouTube' ? 'YT' : node.platform === 'TikTok' ? 'TK' : '?';
+                      return (
+                        <g opacity={opacity}>
+                          <polygon
+                            points={`0,${-s} ${s},0 0,${s} ${-s},0`}
+                            fill={c.fill} stroke={c.stroke} strokeWidth="2.5"
+                            className="transition-all duration-300"
+                            filter={isSelected ? "url(#glow)" : undefined}
+                          />
+                          <text
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fill="#fff"
+                            fontSize={r * 0.5}
+                            fontWeight="bold"
+                            style={{ textShadow: '0 1px 3px rgba(0,0,0,0.6)', pointerEvents: 'none' }}
+                          >
+                            {letter}
+                          </text>
+                        </g>
+                      );
+                    }
+
+                    if (node.group === 'hashtag') {
+                      // Rounded square for hashtags
+                      const s = r * 1.1;
+                      return (
+                        <g opacity={opacity}>
+                          <rect
+                            x={-s} y={-s} width={s * 2} height={s * 2} rx={s * 0.35}
+                            fill={c.fill} stroke={c.stroke} strokeWidth="2.5"
+                            className="transition-all duration-300"
+                            filter={isSelected ? "url(#glow)" : undefined}
+                          />
+                          <text
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fill="#fff"
+                            fontSize={r * 0.55}
+                            fontWeight="bold"
+                            style={{ textShadow: '0 1px 3px rgba(0,0,0,0.6)', pointerEvents: 'none' }}
+                          >
+                            #
+                          </text>
+                        </g>
+                      );
+                    }
+
+                    if (node.group === 'buzzer_master') {
+                      // Triangle for buzzer masters
+                      const s = r * 1.3;
+                      return (
+                        <g opacity={opacity}>
+                          <polygon
+                            points={`0,${-s} ${-s * 0.866},${s * 0.5} ${s * 0.866},${s * 0.5}`}
+                            fill={c.fill} stroke={c.stroke} strokeWidth="2.5"
+                            className="transition-all duration-300"
+                            filter={isSelected ? "url(#glow)" : undefined}
+                          />
+                          <text
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fill="#fff"
+                            fontSize={r * 0.5}
+                            fontWeight="bold"
+                            style={{ textShadow: '0 1px 3px rgba(0,0,0,0.6)', pointerEvents: 'none' }}
+                          >
+                            !
+                          </text>
+                        </g>
+                      );
+                    }
+
+                    if (node.group === 'buzzer') {
+                      // Circle with dashed stroke for buzzers
+                      return (
+                        <g opacity={opacity}>
+                          <circle r={r} fill={c.fill} stroke={c.stroke} strokeWidth="2" strokeDasharray="3 2" />
+                          {node.botScore && node.botScore > 80 && (
+                            <circle r={r + 3} fill="none" stroke="#ff4444" strokeWidth="1" opacity="0.6" />
+                          )}
+                        </g>
+                      );
+                    }
+
+                    // Fallback
+                    return (
+                      <circle r={r} fill={c.fill} stroke={c.stroke} strokeWidth="2" opacity={opacity} className="transition-all duration-300" />
+                    );
+                  })()}
 
                   {/* Simple text labels for important nodes */}
-                  {(node.size >= 16 || isSelected || isHovered) && (
+                  {(node.size >= 12 || isSelected || isHovered || node.group === 'platform_hub') && (
                     <g transform={`translate(0, -${node.size + 6})`}>
                       <rect
                         x="-45"
@@ -354,14 +598,19 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
               title="Reset zoom"
             >↺</button>
           </div>
-          <div className="absolute bottom-3 left-3 flex gap-3 text-[9px] bg-slate-950/95 backdrop-blur px-3 py-1.5 rounded-lg border border-slate-800/80 text-slate-400 font-mono flex-wrap">
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-indigo-500"></span> Campaign</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400"></span> Master</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-teal-500"></span> Hashtag</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500"></span> Bot</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-sky-500"></span> X Hub</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-600"></span> YT Hub</div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-cyan-500"></span> TK Hub</div>
+          <div className="absolute bottom-3 left-3 flex flex-col gap-0.5 text-[10px] bg-slate-950/95 backdrop-blur px-3 py-2 rounded-lg border border-slate-800/80 text-slate-400 font-mono max-h-[320px] overflow-y-auto">
+            {legendItems.map((item: any) => {
+              if (item.isHeader) return <span key={item.key} className="text-[8px] uppercase tracking-widest text-slate-600 mt-1 first:mt-0">{item.key}</span>;
+              return (
+                <div key={item.key} className="flex items-center gap-2">
+                  <GroupMiniShape group={item.group} fill={item.fill} stroke={item.stroke} platform={item.platform} />
+                  <div>
+                    <span className="text-slate-300 font-semibold">{item.key}</span>
+                    <span className="text-slate-600 ml-1.5">{item.desc}</span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <div className="absolute bottom-3 right-3 text-[9px] text-slate-600 font-mono">
             {Math.round(zoom * 100)}%
@@ -371,16 +620,19 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
 
       {/* Node Details Inspection Panel */}
       <div className="flex flex-col bg-slate-950/60 rounded-xl border border-slate-800/80 p-5 shadow-inner">
-        {selectedNode ? (
+        {selectedNode ? (() => {
+          const detailStyle = getGroupStyle(selectedNode.group, selectedNode.botScore, selectedNode.platform);
+          return (
           <div className="h-full flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-4">
-                <span className={`text-[10px] uppercase tracking-wider font-semibold font-mono px-2 py-0.5 rounded ${
-                  selectedNode.group === 'campaign' ? 'bg-indigo-500/20 text-indigo-400' :
-                  selectedNode.group === 'hashtag' ? 'bg-teal-500/20 text-teal-400' :
-                  selectedNode.group === 'platform_hub' ? 'bg-purple-500/20 text-purple-400' :
-                  'bg-rose-500/20 text-rose-400'
-                }`}>
+                <span
+                  className="text-[10px] uppercase tracking-wider font-semibold font-mono px-2 py-0.5 rounded"
+                  style={{
+                    backgroundColor: `${detailStyle.fill}22`,
+                    color: detailStyle.fill,
+                  }}
+                >
                   {selectedNode.group.replace('_', ' ')}
                 </span>
                 {selectedNode.platform && (
@@ -391,8 +643,8 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
               </div>
 
               <div className="flex items-start gap-3 mb-4">
-                <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                  {getIconForGroup(selectedNode.group, selectedNode.botScore)}
+                <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
+                  <MiniNodeShape group={selectedNode.group} fill={detailStyle.fill} stroke={detailStyle.stroke} size={32} platform={selectedNode.platform} />
                 </div>
                 <div>
                   <h4 className="text-slate-200 font-bold tracking-tight text-sm">
@@ -404,11 +656,11 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
                 </div>
               </div>
 
-              {/* Bot Probability Meter if applicable */}
+              {/* Buzzer Probability Meter if applicable */}
               {selectedNode.botScore !== undefined && (
                 <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800/60 mb-4">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs text-slate-400 font-medium">Buzzer/Bot Probability</span>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-slate-400 font-medium">Probabilitas Buzzer</span>
                     <span className={`text-sm font-bold font-mono ${
                       selectedNode.botScore > 80 ? 'text-red-400' :
                       selectedNode.botScore > 50 ? 'text-orange-400' :
@@ -419,12 +671,15 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
                   </div>
                   <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
                     <div
-                      className={`h-full rounded-full transition-all duration-500 ${
-                        selectedNode.botScore > 80 ? 'bg-gradient-to-r from-red-500 to-rose-600' :
-                        selectedNode.botScore > 50 ? 'bg-gradient-to-r from-yellow-400 to-orange-500' :
-                        'bg-gradient-to-r from-emerald-400 to-green-500'
-                      }`}
-                      style={{ width: `${selectedNode.botScore}%` }}
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        background: selectedNode.botScore && selectedNode.botScore > 80
+                          ? `linear-gradient(90deg, ${groupColors.buzzer_high.fill}, ${groupColors.buzzer_high.stroke})`
+                          : selectedNode.botScore && selectedNode.botScore > 50
+                          ? `linear-gradient(90deg, ${groupColors.buzzer_med.fill}, ${groupColors.buzzer_med.stroke})`
+                          : `linear-gradient(90deg, ${groupColors.buzzer_low.fill}, ${groupColors.buzzer_low.stroke})`,
+                        width: `${selectedNode.botScore}%`,
+                      }}
                     ></div>
                   </div>
                   <p className="text-[10px] text-slate-500 mt-2">
@@ -493,7 +748,8 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
               </p>
             </div>
           </div>
-        ) : (
+          );
+        })() : (
           <div className="h-full flex flex-col justify-center items-center text-center text-slate-500 py-12">
             <HelpCircle className="w-10 h-10 text-slate-700 stroke-1 mb-2" />
             <p className="text-sm">No node selected</p>

@@ -16,8 +16,39 @@ async def search(keyword: str, limit: int = 20):
     results = []
     try:
         async with TikTokApi() as api:
-            await api.create_sessions(ms_tokens=[ms_token], num_sessions=1, sleep_after=3)
+            await api.create_sessions(
+                ms_tokens=[ms_token],
+                num_sessions=1,
+                sleep_after=3,
+                override_browser_args=["--mute-audio"],
+            )
 
+            # Try hashtag search first (closest to keyword search available)
+            try:
+                async for video in api.hashtag(name=keyword).videos(count=limit):
+                    data = video.as_dict or {}
+                    author = data.get("author", {}) or {}
+                    stats = data.get("stats", {}) or {}
+                    desc = data.get("desc", "")
+                    video_id = data.get("id", "")
+                    results.append({
+                        "title": desc[:100] if desc else "",
+                        "url": f"https://tiktok.com/@{author.get('uniqueId', '')}/video/{video_id}" if video_id else "",
+                        "snippet": desc or "",
+                        "author": author.get("uniqueId", "") or "",
+                        "publishedAt": str(data.get("createTime", "")),
+                        "likes": stats.get("likeCount", 0) or 0,
+                        "comments": stats.get("commentCount", 0) or 0,
+                        "shares": stats.get("shareCount", 0) or 0,
+                        "views": stats.get("playCount", 0) or 0,
+                    })
+                if results:
+                    print(json.dumps({"success": True, "platform": "TikTok", "results": results}), flush=True)
+                    return
+            except Exception:
+                pass
+
+            # Fallback: trending videos
             async for video in api.trending.videos(count=limit):
                 data = video.as_dict or {}
                 author = data.get("author", {}) or {}

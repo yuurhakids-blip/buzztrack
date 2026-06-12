@@ -1,0 +1,1 @@
+import { IGeminiRepository } from '../domain/repositories/IGeminiRepository';export class SaveGeminiKeyUseCase {  constructor(private repository: IGeminiRepository) {}  async execute(key: string): Promise<void> {    if (!key || key.trim() === '') {      throw new Error('API key cannot be empty');    }    await this.repository.saveKey(key);  }}

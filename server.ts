@@ -2,1209 +2,1051 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import express from "express";
-import path from "path";
+import cors from "cors";
+import { createServer } from "node:http";
+import { WebSocketServer } from "ws";
+import path from "node:path";
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-
 const execFileAsync = promisify(execFile);
-import { createServer as createViteServer } from "vite";
-import { INITIAL_CAMPAIGNS, SUSPICIOUS_ACCOUNTS, INITIAL_NETWORK_NODES, INITIAL_NETWORK_LINKS } from "./src/data";
-import { Campaign, UserReport, SuspiciousAccount, NetworkNode, NetworkLink, SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from "./src/types";
-import { INITIAL_SOCIAL_ACCOUNTS, INITIAL_SOCIAL_POSTS, INITIAL_DEMOGRAPHICS, INITIAL_DAILY_ENGAGEMENT } from "./src/socialData";
 
-// In-memory persistent data stores for session
-let campaigns: Campaign[] = [];
-let accounts: SuspiciousAccount[] = [];
-let reports: UserReport[] = [];
+import { FileCampaignRepository } from "./src/infrastructure/repositories/FileCampaignRepository.ts";
+import { FileAccountRepository } from "./src/infrastructure/repositories/FileAccountRepository.ts";
+import { FileGeminiRepository } from "./src/infrastructure/repositories/FileGeminiRepository.ts";
 
-// Network Graph Correlation Stores
-let networkNodes: NetworkNode[] = [];
-let networkLinks: NetworkLink[] = [];
+import { GetCampaignsUseCase } from "./src/core/use-cases/GetCampaignsUseCase.ts";
+import { SaveGeminiKeyUseCase } from "./src/core/use-cases/SaveGeminiKeyUseCase.ts";
+import { AnalyzeThreatUseCase } from "./src/core/use-cases/AnalyzeThreatUseCase.ts";
+import { SubmitReportUseCase } from "./src/core/use-cases/SubmitReportUseCase.ts";
+import { AnalyzeNetworkUseCase } from "./src/core/use-cases/AnalyzeNetworkUseCase.ts";
+import { SummarizeCampaignUseCase } from "./src/core/use-cases/SummarizeCampaignUseCase.ts";
+import { ClassifyReportUseCase } from "./src/core/use-cases/ClassifyReportUseCase.ts";
+import { AnalyzeSentimentUseCase } from "./src/core/use-cases/AnalyzeSentimentUseCase.ts";
+import { RecommendThresholdsUseCase } from "./src/core/use-cases/RecommendThresholdsUseCase.ts";
+import { LabelContentUseCase } from "./src/core/use-cases/LabelContentUseCase.ts";
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-// Social Integration Stores
-let socialAccounts: SocialAccount[] = [];
-let socialPosts: SocialPost[] = [];
-let demographicsData: Record<string, AudienceDemographics> = { ...INITIAL_DEMOGRAPHICS };
-let dailyEngagement: DailyEngagement[] = [];
+// ---------- Repository Instances ----------
+const campaignRepo = new FileCampaignRepository();
+const accountRepo = new FileAccountRepository();
+const geminiRepo = new FileGeminiRepository();
 
+const getCampaignsUseCase = new GetCampaignsUseCase(campaignRepo);
+const saveGeminiKeyUseCase = new SaveGeminiKeyUseCase(geminiRepo);
+const analyzeThreatUseCase = new AnalyzeThreatUseCase(geminiRepo);
+const submitReportUseCase = new SubmitReportUseCase();
+const analyzeNetworkUseCase = new AnalyzeNetworkUseCase(geminiRepo);
+const summarizeCampaignUseCase = new SummarizeCampaignUseCase(geminiRepo);
+const classifyReportUseCase = new ClassifyReportUseCase(geminiRepo);
+const analyzeSentimentUseCase = new AnalyzeSentimentUseCase(geminiRepo);
+const recommendThresholdsUseCase = new RecommendThresholdsUseCase(geminiRepo);
+const labelContentUseCase = new LabelContentUseCase(geminiRepo);
 
-let scraperDir = path.join(process.cwd(), "scrapers");
+// ---------- WebSocket Server ----------
+const server = createServer(app);
+const wss = new WebSocketServer({ server, path: "/graph-updates" });
+wss.setMaxListeners(200);
+wss.on("connection", (ws) => {
+  console.log("Client connected for graph updates");
+  ws.on("close", () => console.log("Client disconnected"));
+});
 
-interface ScraperResult {
-  success: boolean;
-  platform: string;
-  results?: Array<{
-    title: string;
-    url: string;
-    snippet: string;
-    author: string;
-    publishedAt: string;
-    likes: number;
-    comments: number;
-    shares: number;
-    views?: number;
-  }>;
-  error?: string;
-}
+// ---------- API Routes ----------
+app.get("/api/campaigns", async (req, res) => {
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 20;
+  const repoData = await getCampaignsUseCase.execute(page, limit);
+  const data = scrapedCampaigns.length > 0 ? scrapedCampaigns : repoData.data;
+  res.json({ data, pagination: { page, limit, total: data.length } });
+});
 
-async function runPythonScraper(platform: string, keyword: string, limit = 20): Promise<ScraperResult> {
+app.get("/api/accounts", async (req, res) => {
+  const data = scrapedAccounts.length > 0 ? scrapedAccounts : await accountRepo.getAll();
+  res.json({ data });
+});
+
+app.get("/api/stats", async (req, res) => {
+  const campaigns = scrapedCampaigns.length > 0 ? scrapedCampaigns : await campaignRepo.getAll();
+  const accounts = scrapedAccounts.length > 0 ? scrapedAccounts : await accountRepo.getAll();
+  const totalReach = campaigns.reduce((acc: number, c: any) => acc + c.reach, 0);
+  const activeBuzzerCount = campaigns.reduce((acc: number, c: any) => acc + c.buzzerCount, 0) + accounts.length;
+  const avgBotScore = Math.round(
+    accounts.reduce((acc: number, a: any) => acc + a.botScore, 0) / (accounts.length || 1)
+  );
+
+  res.json({
+    totalCampaigns: campaigns.length,
+    activeCampaignsCount: campaigns.filter((c) => c.status === "Active").length,
+    totalReach,
+    activeBuzzerCount,
+    avgBotScore,
+    recentReportsCount: 0,
+  });
+});
+
+app.post("/api/reports", async (req, res) => {
+  const { url, username, platform, narrative, evidence, email } = req.body;
+  if (!url || !platform || !narrative) {
+    return res.status(400).json({ error: "Missing required fields (url, platform, narrative)" });
+  }
+
+  const report = await submitReportUseCase.execute({
+    url,
+    username,
+    platform,
+    narrative,
+    evidence,
+    email,
+  });
+
+  // Broadcast graph update if needed
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) {
+      client.send(JSON.stringify({ type: "GRAPH_UPDATE" }));
+    }
+  });
+
+  res.status(201).json({ success: true, report });
+});
+
+app.post("/api/gemini/key", async (req, res) => {
+  const { key } = req.body;
+  if (!key?.trim()) {
+    return res.status(400).json({ error: "API key required" });
+  }
+  await saveGeminiKeyUseCase.execute(key);
+  res.json({ success: true });
+});
+
+app.get("/api/gemini/key", async (req, res) => {
+  const key = await geminiRepo.getKey();
+  res.json({ key });
+});
+
+app.post("/api/analyze", async (req, res) => {
+  const { type, content, platform } = req.body;
+  if (!content) {
+    return res.status(400).json({ error: "Content is required for analysis." });
+  }
+  const result = await analyzeThreatUseCase.execute(type, content, platform);
+  res.json(result);
+});
+
+// ---------- AI-Powered Features (Gemini + fallback) ----------
+app.post("/api/ai/analyze-network", async (req, res) => {
+  const { nodes, links } = req.body;
+  const result = await analyzeNetworkUseCase.execute(nodes || [], links || []);
+  res.json(result);
+});
+
+app.post("/api/ai/summarize-campaign", async (req, res) => {
+  const { campaign } = req.body;
+  if (!campaign) return res.status(400).json({ error: "Campaign data required" });
+  const result = await summarizeCampaignUseCase.execute(campaign);
+  res.json(result);
+});
+
+app.post("/api/ai/classify-report", async (req, res) => {
+  const { url, narrative, evidence } = req.body;
+  const result = await classifyReportUseCase.execute(url || '', narrative || '', evidence || '');
+  res.json(result);
+});
+
+app.post("/api/ai/analyze-sentiment", async (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: "Text required" });
+  const result = await analyzeSentimentUseCase.execute(text);
+  res.json(result);
+});
+
+app.post("/api/ai/recommend-thresholds", async (req, res) => {
+  const { campaigns, accounts } = req.body;
+  const result = await recommendThresholdsUseCase.execute(campaigns || [], accounts || []);
+  res.json(result);
+});
+
+app.post("/api/ai/label-content", async (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: "Text required" });
+  const result = await labelContentUseCase.execute(text);
+  res.json(result);
+});
+
+// ---------- Python scraper integration ----------
+async function runPythonScraper(platform: string, keyword: string, limit: number = 10): Promise<any> {
   try {
     const { stdout } = await execFileAsync("python", [
       "scrapers/run_scraper.py",
       platform,
-      "--keyword",
-      keyword,
-      "--limit",
-      String(limit),
-    ], { cwd: process.cwd(), windowsHide: true });
+      "--keyword", keyword,
+      "--limit", String(limit),
+    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, PYTHONUNBUFFERED: "1" } });
     return JSON.parse(stdout);
-  } catch (err: any) {
-    console.error(`[Scraper] Python ${platform} scraper error:`, err.message || err);
-    return { success: false, platform, error: err.message };
+  } catch (e: any) {
+    if (e.stdout) {
+      try { return JSON.parse(e.stdout); } catch { /* ignore */ }
+    }
+    return { success: false, platform, error: e.message || String(e) };
   }
 }
 
+function mapScraperResults(results: any[], keyword: string) {
+  const id = Date.now().toString();
+  const allPosts: any[] = [];
+  const authorsMap = new Map<string, any>();
+  // Only include platforms that actually returned results
+  const nonEmpty = results.filter(r => r.results && r.results.length > 0);
+  const platformLabels: Record<string, string> = { X: 'X', twitter: 'X', youtube: 'YouTube', tiktok: 'TikTok' };
 
-async function startServer() {
-  const app = express();
-  const PORT = parseInt(process.env.PORT || "3000", 10);
+  nonEmpty.forEach(platformResult => {
+    const platform = platformLabels[platformResult.platform] || platformResult.platform;
+    (platformResult.results || []).forEach((item: any, idx: number) => {
+      const postId = `post-${id}-${platform}-${idx}`;
+      allPosts.push({
+        id: postId,
+        platform,
+        authorUsername: item.author || 'unknown',
+        text: item.snippet || item.title || '',
+        postUrl: item.url || '',
+        publishedAt: item.publishedAt || new Date().toISOString(),
+        likes: item.likes || 0,
+        comments: item.comments || 0,
+        shares: item.shares || 0,
+        reach: (item.views || 0) + (item.likes || 0) * 10,
+        engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+      });
 
-  app.use(express.json());
-
-  // 1. API: Get Campaigns
-  app.get("/api/campaigns", (req, res) => {
-    res.json(campaigns);
-  });
-
-  // 2. API: Get Accounts
-  app.get("/api/accounts", (req, res) => {
-    res.json(accounts);
-  });
-
-  // 3. API: Get Global Stats
-  app.get("/api/stats", (req, res) => {
-    const totalReach = campaigns.reduce((acc, c) => acc + c.reach, 0);
-    const activeBuzzersCount = campaigns.reduce((acc, c) => acc + c.buzzerCount, 0) + accounts.length;
-    const avgBotScore = Math.round(accounts.reduce((acc, a) => acc + a.botScore, 0) / (accounts.length || 1));
-    
-    res.json({
-      totalCampaigns: campaigns.length,
-      activeCampaignsCount: campaigns.filter(c => c.status === "Active").length,
-      totalReach,
-      activeBuzzersCount,
-      avgBotScore,
-      recentReportsCount: reports.length
-    });
-  });
-
-  // 4. API: Submit User Report
-  app.post("/api/reports", (req, res) => {
-    const { url, username, platform, narrative, evidence, email } = req.body;
-
-    if (!url || !platform || !narrative) {
-      return res.status(400).json({ error: "Missing required fields (url, platform, narrative)" });
-    }
-
-    const newReport: UserReport = {
-      id: `rep-${Date.now()}`,
-      reportedUrl: url,
-      username: username || "anonymous",
-      platform: platform,
-      narrativeDescription: narrative,
-      evidenceText: evidence || "",
-      reporterEmail: email || null,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      status: 'Pending Review'
-    };
-
-    reports.push(newReport);
-
-    // If report mentions a hashtag or narrative, let's inject it into campaigns to show live synchronization!
-    if (narrative.startsWith('#') || narrative.includes('#')) {
-      const hashtag = narrative.split(' ').find((w: string) => w.startsWith('#')) || '#ReportedTag';
-      const existingCampaign = campaigns.find(c => c.title.toLowerCase() === hashtag.toLowerCase());
-      
-      if (existingCampaign) {
-        existingCampaign.buzzerCount += 1;
-        existingCampaign.reach += 5000;
-      } else {
-        campaigns.unshift({
-          id: `camp-${Date.now()}`,
-          title: hashtag,
-          description: `User-reported suspicious activity: "${narrative}"`,
-          topic: 'Community Flagged',
-          platforms: [platform],
-          intensity: 'Low',
-          sentiment: 'Neutral',
-          startDate: new Date().toISOString().split('T')[0],
-          status: 'Monitoring',
-          botRatio: 0.50,
-          reach: 12000,
-          hashtags: [hashtag],
-          keyNarrative: evidence || 'Under investigation by community reports.',
-          buzzerCount: 15
-        });
-      }
-    } else if (username) {
-      // If it reports a user, let's add them to the suspicious accounts list dynamically!
-      const existingAcc = accounts.find(a => a.username.toLowerCase() === username.toLowerCase());
-      if (!existingAcc) {
-        accounts.unshift({
-          id: `acc-${Date.now()}`,
-          username: username.replace('@', ''),
-          displayName: username,
+      if (item.author && !authorsMap.has(item.author)) {
+        authorsMap.set(item.author, {
+          id: `acc-${id}-${authorsMap.size}`,
+          username: item.author,
+          displayName: item.author,
           platform,
-          followers: 12,
-          following: 890,
-          botScore: 78,
+          followers: Math.floor(100 + Math.random() * 5000),
+          following: Math.floor(500 + Math.random() * 3000),
+          botScore: Math.floor(60 + Math.random() * 40),
           status: 'Flagged',
-          lastActive: new Date().toISOString().replace('T', ' ').substring(0, 16),
-          reason: `Reported by user for: "${narrative}"`,
-          recentCopypastaCount: 3
+          lastActive: item.publishedAt || new Date().toISOString(),
+          reason: `Suspected coordination in "${keyword}" disinformation network.`,
+          recentCopypastaCount: Math.floor(3 + Math.random() * 20),
         });
       }
-    }
-
-    res.status(201).json({ success: true, report: newReport });
+    });
   });
 
-  // ==========================================
-  // SOCIAL INTEGRATION & ANALYTICS API ROUTES
-  // ==========================================
+  scrapedPosts = allPosts;
+  scrapedAccounts = Array.from(authorsMap.values());
 
-  // A. Get Connected Social Accounts
-  app.get("/api/social/accounts", (req, res) => {
-    res.json(socialAccounts);
-  });
-
-  // B. Get Fetched Posts with Metrics
-  app.get("/api/social/posts", (req, res) => {
-    res.json(socialPosts);
-  });
-
-  // C. Find Demographics Breakdowns
-  app.get("/api/social/demographics", (req, res) => {
-    const platform = (req.query.platform as string) || "All";
-    const data = demographicsData[platform] || demographicsData["All"] || {
-      ageBreakdown: [],
-      genderBreakdown: [],
-      regionBreakdown: []
+  scrapedCampaigns = nonEmpty.map((r, i) => {
+    const platform = platformLabels[r.platform] || r.platform;
+    const posts = r.results || [];
+    const totalReach = posts.reduce((acc: number, p: any) => acc + (p.views || 0) + (p.likes || 0) * 10, 0);
+    return {
+      id: `camp-${id}-${i}`,
+      title: `${keyword} - ${platform}`,
+      description: `Disinformation campaign around "${keyword}" detected on ${platform} (${posts.length} posts).`,
+      topic: keyword,
+      platforms: [platform],
+      intensity: ['Low', 'Medium', 'High', 'Critical'][i % 4],
+      sentiment: ['Positive', 'Negative', 'Neutral', 'Mixed'][i % 4],
+      startDate: new Date().toISOString().slice(0, 10),
+      status: 'Active',
+      botRatio: 0.5 + Math.random() * 0.45,
+      reach: totalReach || Math.floor(50000 + Math.random() * 200000),
+      hashtags: [`#${keyword}`],
+      keyNarrative: `Coordinated amplification of "${keyword}" on ${platform}.`,
+      buzzerCount: posts.length,
     };
-    res.json(data);
   });
 
-  // D. Find engagement timeline data
-  app.get("/api/social/engagement", (req, res) => {
-    res.json(dailyEngagement);
-  });
-
-  // E. Construct Authorization URLs for Twitter (X), YouTube, and TikTok
-  app.get("/api/social/auth/url", (req, res) => {
-    const platform = req.query.platform as string;
-    if (!platform || !["X", "YouTube", "TikTok"].includes(platform)) {
-      return res.status(400).json({ error: "Invalid platform requested." });
-    }
-
-    const appUrl = (process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || "https://example.com").replace(/\/$/, "");
-    const redirectUri = `${appUrl}/auth/callback`;
-    
-    let clientId = "";
-    let authEndpoint = "";
-    let scopes = "";
-
-    if (platform === "X") {
-      clientId = process.env.TWITTER_CLIENT_ID || "";
-      authEndpoint = "https://twitter.com/i/oauth2/authorize";
-      scopes = "tweet.read users.read offline.access";
-    } else if (platform === "YouTube") {
-      clientId = process.env.YOUTUBE_CLIENT_ID || process.env.YOUTUBE_API_KEY || "";
-      authEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
-      scopes = "https://www.googleapis.com/auth/youtube.readonly";
-    } else if (platform === "TikTok") {
-      clientId = process.env.TIKTOK_CLIENT_ID || "";
-      authEndpoint = "https://www.tiktok.com/v2/auth/authorize/";
-      scopes = "user.info.basic,video.list";
-    }
-
-    // Connect with OAuth flow if client keys exist, else fall back to beautiful Sandbox popups!
-    if (clientId && clientId !== "MY_CLIENT_ID" && clientId.trim() !== "") {
-      let url = "";
-      if (platform === "TikTok") {
-        url = `${authEndpoint}?client_key=${clientId}&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&state=security_state_${platform}`;
-      } else if (platform === "X") {
-        url = `${authEndpoint}?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&state=security_state_${platform}&code_challenge=challenge&code_challenge_method=plain`;
-      } else {
-        url = `${authEndpoint}?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&state=security_state_${platform}`;
-      }
-      return res.json({ url, real: true });
-    } else {
-      const sandboxUrl = `/auth/sandbox?platform=${platform}`;
-      return res.json({ url: sandboxUrl, real: false });
-    }
-  });
-
-  // F. Endpoint to Connect a Social Account (Deterministic local real-time profile generator)
-  app.post("/api/social/connect", async (req, res) => {
-    const { platform, username } = req.body;
-    if (!platform || !username) {
-      return res.status(400).json({ error: "Missing platform or username fields." });
-    }
-
-    const sanitizedUsername = username.replace('@', '');
-    const exists = socialAccounts.find(a => a.platform === platform && a.username.toLowerCase() === sanitizedUsername.toLowerCase());
-    
-    if (exists) {
-      return res.json({ success: true, account: exists });
-    }
-
-    try {
-      console.log(`Analyzing digital footprint and connecting @${sanitizedUsername} on platform ${platform}`);
-
-      const formattedName = sanitizedUsername
-        .split(/[._-]+/)
-        .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ');
-
-      const displayName = `${formattedName} (${platform} Tracker)`;
-      const followersCount = Math.floor(4500 + Math.random() * 125000);
-      const postCount = 4;
-
-      const newAccount: SocialAccount = {
-        id: `soc-acc-${Date.now()}`,
-        username: sanitizedUsername,
-        displayName,
-        platform: platform as any,
-        connectedAt: new Date().toISOString().split('T')[0],
-        followersCount,
-        postCount
-      };
-
-      socialAccounts.push(newAccount);
-
-      // Try to fetch real posts from platform scraper
-      const scraperResult = await runPythonScraper(platform === "X" ? "twitter" : platform.toLowerCase(), sanitizedUsername, 4);
-      
-      const realTexts: string[] = [];
-      if (scraperResult.success && scraperResult.results) {
-        scraperResult.results.forEach(r => {
-          if (r.snippet && r.snippet.trim().length > 10) {
-            realTexts.push(r.snippet);
-          }
-        });
-      }
-
-      const fallbackTexts: string[] = [
-        `Menganalisis indikasi paparan kampanye manipulasi digital dan koordinasi siber inautentik (CIB) di media sosial. #SiberWatch`,
-        `Melakukan pelacakan taktik penyebaran komentar seragam botnet secara masif hari ini demi kenyamanan pengguna.`,
-        `Edukasi literasi digital cyber security untuk mengidentifikasi akun kloningan dan buzzer spammer lokal.`,
-        `Meluncurkan botnet scanner tools guna menyaring paparan ujaran kebencian digital.`
-      ];
-
-      const textsToUse = realTexts.length >= 2 ? realTexts : fallbackTexts;
-      const postsCount = 4;
-
-      for (let i = 0; i < postsCount; i++) {
-        const likes = Math.floor(150 + Math.random() * 2500);
-        const comments = Math.floor(20 + Math.random() * 450);
-        const shares = Math.floor(30 + Math.random() * 600);
-        const reach = Math.floor((likes + comments + shares) * (4 + Math.random() * 5));
-        const engagementRate = parseFloat((((likes + comments + shares) / reach) * 100).toFixed(2));
-
-        socialPosts.unshift({
-          id: `post-gen-${Date.now()}-${i}`,
-          platform: platform as any,
-          authorUsername: sanitizedUsername,
-          text: textsToUse[i % textsToUse.length],
-          postUrl: scraperResult.results?.[i]?.url || `https://${platform.toLowerCase()}.com/${sanitizedUsername}/status/${Math.floor(100000 + Math.random() * 899999)}`,
-          publishedAt: new Date(Date.now() - i * 18 * 60 * 60 * 1000).toISOString(),
-          likes,
-          comments,
-          shares,
-          reach,
-          engagementRate
-        });
-      }
-
-      // Populate platform demographics structure
-      demographicsData[platform] = {
-        ageBreakdown: [
-          { category: '13-17', value: platform === 'TikTok' ? 32 : 12 },
-          { category: '18-24', value: platform === 'TikTok' ? 44 : 35 },
-          { category: '25-34', value: 28 },
-          { category: '35-44', value: 15 },
-          { category: '45-54', value: 7 },
-          { category: '55+', value: 3 }
-        ],
-        genderBreakdown: [
-          { category: 'Male', value: platform === 'X' ? 58 : 48 },
-          { category: 'Female', value: platform === 'X' ? 39 : 49 },
-          { category: 'Non-binary', value: 3 }
-        ],
-        regionBreakdown: [
-          { category: 'DKI Jakarta', value: 38 },
-          { category: 'Jawa Barat', value: 22 },
-          { category: 'Jawa Timur', value: 16 },
-          { category: 'Sumatera Utara', value: 14 },
-          { category: 'Sulawesi Selatan', value: 10 }
-        ]
-      };
-
-      return res.json({ success: true, account: newAccount });
-
-    } catch (scrapError: any) {
-      console.error("Real-time profile connection failed:", scrapError);
-      return res.status(500).json({ error: "Gagal menghubungkan profil real-time: " + (scrapError.message || scrapError) });
-    }
-  });
-
-  // G. Disconnect a connected social profile
-  app.post("/api/social/disconnect", (req, res) => {
-    const { id } = req.body;
-    const account = socialAccounts.find(a => a.id === id);
-    if (!account) {
-      return res.status(404).json({ error: "Connected account was not found." });
-    }
-
-    socialAccounts = socialAccounts.filter(a => a.id !== id);
-    // Remove allied posts to clear views
-    socialPosts = socialPosts.filter(p => !(p.platform === account.platform && p.authorUsername === account.username));
-    res.json({ success: true });
-  });
-
-  // H. Synchronize social media account metrics
-  app.post("/api/social/sync", async (req, res) => {
-    const { id } = req.body;
-    const account = socialAccounts.find(a => a.id === id);
-    if (!account) {
-      return res.status(404).json({ error: "Connected account was not found." });
-    }
-
-    try {
-      console.log(`Syncing social analytics telemetry for @${account.username} on ${account.platform}`);
-
-      // Increment follower counts realistically as new siber engagements happen
-      const newFollowersGained = Math.floor(15 + Math.random() * 250);
-      account.followersCount += newFollowersGained;
-
-      // Update engagement metrics on existing posts for this user
-      socialPosts.forEach(post => {
-        if (post.platform === account.platform && post.authorUsername === account.username) {
-          const addLikes = Math.floor(10 + Math.random() * 120);
-          const addComments = Math.floor(2 + Math.random() * 30);
-          const addShares = Math.floor(4 + Math.random() * 50);
-
-          post.likes += addLikes;
-          post.comments += addComments;
-          post.shares += addShares;
-          post.reach += Math.floor((addLikes + addComments + addShares) * 6.5);
-          post.engagementRate = parseFloat((((post.likes + post.comments + post.shares) / post.reach) * 100).toFixed(2));
-        }
-      });
-
-      res.json({ success: true, message: `Berhasil mensinkronisasi metrik real-time hasil scraping untuk @${account.username}. (+${newFollowersGained} pengikut baru terdeteksi)` });
-
-    } catch (syncError: any) {
-      console.error("Real-time profile sync failed:", syncError);
-      return res.status(500).json({ error: "Gagal mensinkronisasikan profil siber real-time: " + (syncError.message || syncError) });
-    }
-  });
-
-  // J. OAuth Callback Landing Page (Handles both real and fallback redirects)
-  app.get("/auth/callback", (req, res) => {
-    let platform = (req.query.platform || "") as string;
-    const state = (req.query.state || "") as string;
-    const code = (req.query.code || "") as string;
-
-    if (!platform && state) {
-      if (state.includes("X")) platform = "X";
-      else if (state.includes("YouTube")) platform = "YouTube";
-      else if (state.includes("TikTok")) platform = "TikTok";
-    }
-
-    if (!platform) platform = "X";
-
-    // Generate/resolve realistic handle
-    const demoUsernames: Record<string, string[]> = {
-      'X': ['SiberWatcher_X', 'RadarIntel_ID', 'SkeptisMedsos', 'KawalPemilu_X'],
-      'YouTube': ['OpiniSiber_TV', 'CerdasBangsa_Channel', 'FaktaNusantara_YT', 'Senter_Demokrasi'],
-      'TikTok': ['siber.watch.id', 'awas_hoaks_tiktok', 'kamuharustau_fakta', 'rakyat_merdeka']
-    };
-    const choices = demoUsernames[platform] || ['DemoUser'];
-    const choicesList = Array.isArray(choices) ? choices : ['DemoUser'];
-    const chosen = choicesList[Math.floor(Math.random() * choicesList.length)];
-    const username = `${chosen}${Math.floor(10 + Math.random() * 89)}`;
-
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>OAuth Success - EchoWatch Tracker</title>
-        <style>
-          body {
-            background-color: #0A0A0B;
-            color: #E0E0E0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            text-align: center;
-          }
-          .card {
-            background-color: #121215;
-            border: 2px solid #52C41A;
-            border-radius: 12px;
-            padding: 40px;
-            max-width: 400px;
-            width: 100%;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-          }
-          h1 { color: #52C41A; font-size: 20px; margin-bottom: 10px; }
-          p { font-size: 14px; color: #A0A0A5; margin-bottom: 20px; }
-          .spinner {
-            border: 3px solid #1A1A1F;
-            border-top: 3px solid #52C41A;
-            border-radius: 50%;
-            width: 24px;
-            height: 24px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
-          }
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>Autentikasi Berhasil!</h1>
-          <p>Mengkoneksikan akun @${username} pada platform ${platform}...</p>
-          <div class="spinner"></div>
-        </div>
-        <script>
-          setTimeout(() => {
-            if (window.opener) {
-              window.opener.postMessage({ 
-                type: 'OAUTH_AUTH_SUCCESS',
-                platform: '${platform}',
-                username: '${username}'
-              }, '*');
-              window.close();
-            } else {
-              window.location.href = '/';
-            }
-          }, 1500);
-        </script>
-      </body>
-      </html>
-    `);
-  });
-
-  // I. Simulated Sandbox Authorization Page (Fulfills pop-up requirement)
-  app.get("/auth/sandbox", (req, res) => {
-    const platform = req.query.platform || "X";
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Connect ${platform} - EchoWatch Auth Portal</title>
-        <style>
-          body {
-            background-color: #0A0A0B;
-            color: #E0E0E0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            padding: 20px;
-            box-sizing: border-box;
-          }
-          .card {
-            background-color: #121215;
-            border: 1px solid #D4AF37;
-            border-radius: 12px;
-            padding: 35px;
-            max-width: 440px;
-            width: 100%;
-            text-align: center;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 1px #D4AF37;
-          }
-          .badge {
-            background-color: rgba(212, 175, 55, 0.1);
-            color: #D4AF37;
-            border: 1px solid rgba(212, 175, 55, 0.3);
-            padding: 6px 14px;
-            border-radius: 20px;
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            display: inline-block;
-            margin-bottom: 25px;
-            font-weight: bold;
-          }
-          h1 {
-            font-size: 22px;
-            font-weight: 600;
-            margin: 0 0 12px 0;
-            color: #F5F5F5;
-            letter-spacing: -0.5px;
-          }
-          p {
-            font-size: 13.5px;
-            color: #A0A0A5;
-            line-height: 1.6;
-            margin: 0 0 30px 0;
-          }
-          .btn {
-            background: linear-gradient(135deg, #D4AF37, #8A6D3B);
-            color: #0A0A0B;
-            border: none;
-            border-radius: 6px;
-            padding: 14px 28px;
-            font-size: 13px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.2s;
-            width: 100%;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          }
-          .btn:hover {
-            filter: brightness(1.15);
-            box-shadow: 0 0 12px rgba(212, 175, 55, 0.25);
-          }
-          .btn:active {
-            transform: scale(0.98);
-          }
-          .note {
-            font-size: 11px;
-            color: #55555E;
-            margin-top: 25px;
-            line-height: 1.5;
-            border-top: 1px solid #1E1E24;
-            padding-top: 15px;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <div class="badge">${platform} Safe Authentication</div>
-          <h1>Integrasikan Akun Sosial</h1>
-          <p>Izinkan sistem <b>EchoWatch Tracker</b> menarik postingan, reach publik, dan statistik keterlibatan (likes, comments, shares) dari profil publik ${platform} Anda.</p>
-          <button class="btn" onclick="authorize()">Izinkan Akses Layanan</button>
-          <div class="note">
-            Catatan: Untuk menggunakan OAuth riil dengan API Keys Anda sendiri, konfigurasikan file .env dengan variabel CLIENT_ID & CLIENT_SECRET sesuai instruksi.
-          </div>
-        </div>
-        <script>
-          function authorize() {
-            if (window.opener) {
-              const demoUsernames = {
-                'X': ['SiberWatcher_X', 'RadarIntel_ID', 'SkeptisMedsos'],
-                'YouTube': ['OpiniSiber_TV', 'CerdasBangsa_Channel', 'FaktaNusantara_YT'],
-                'TikTok': ['siber.watch.id', 'awas_hoaks_tiktok', 'kamuharustau_fakta']
-              };
-              const array = demoUsernames['${platform}'] || ['DemoUser'];
-              const chosen = array[Math.floor(Math.random() * array.length)];
-              const suffix = Math.floor(10 + Math.random() * 89);
-              
-              window.opener.postMessage({ 
-                type: 'OAUTH_AUTH_SUCCESS',
-                platform: '${platform}',
-                username: chosen + suffix
-              }, '*');
-              window.close();
-            } else {
-              window.location.href = '/';
-            }
-          }
-        </script>
-      </body>
-      </html>
-    `);
-  });
-
-  // 5. API: Siber Threat Pattern Heuristic Analyzer (Local Processing Engine)
-  app.post("/api/analyze", async (req, res) => {
-    const { type, content, platform } = req.body;
-
-    if (!content) {
-      return res.status(400).json({ error: "Content is required for analysis." });
-    }
-
-    try {
-      console.log(`Performing local threat pattern heuristics scan on dataset. Type: ${type}, Platform: ${platform}`);
-
-      const lowercaseContent = content.toLowerCase();
-      
-      // Cyber security / CIB / bot indicator matrices
-      const buzzerTriggers = [
-        'boikot', 'dukung', 'anti', 'palsu', 'bayaran', 'admin', 'tagar', 'campaign',
-        'curang', 'pasti menang', 'bapak', 'presiden', 'rakyat', 'hoax', 'fitnah',
-        'buzzerrp', 'buzzerrp', 'buzzer', 'rupiah', 'opini', 'rezim', 'grup', 'gabung',
-        'terpercaya', 'amanah', 'gacor', 'ready kak', 'jasa', 'promo'
-      ];
-
-      const matchedTriggers = buzzerTriggers.filter(term => lowercaseContent.includes(term));
-      const hashtagCount = (content.match(/#/g) || []).length;
-      const uppercaseRatio = (content.replace(/[^A-Z]/g, "").length) / (content.length || 1);
-      
-      // Determine bot threat index
-      let threatLevel: 'low' | 'medium' | 'high' = 'low';
-      let confidenceScore = 15;
-      let isBuzzer = false;
-      let verdict: "Genuine Account" | "Suspected Social Buzzer" | "Coordinated Botnet Client" | "Highly Repetitive Spammer" = "Genuine Account";
-      const characteristics: string[] = [];
-      const narratives: string[] = [];
-      const redFlags = [];
-
-      if (matchedTriggers.length >= 3 || hashtagCount >= 3 || uppercaseRatio > 0.35) {
-        isBuzzer = true;
-        threatLevel = 'high';
-        confidenceScore = Math.min(98, 75 + (matchedTriggers.length * 5) + (hashtagCount * 4));
-        verdict = "Coordinated Botnet Client";
-        characteristics.push(
-          "Coordinated metadata patterns matching commercial/political campaign vectors.",
-          "High intensity polar sentiment with low grammatical variance.",
-          "Utilization of preset, standardized commentary scripts."
-        );
-        narratives.push(
-          `Coordinated amplification of keywords: ${matchedTriggers.slice(0, 3).join(', ')}`,
-          "Topic polar framing"
-        );
-        redFlags.push({
-          title: "Siber Coordination Footprint",
-          description: "Struktur kalimat menggunakan template pesan seragam yang terdeteksi di beberapa posting lainnya.",
-          severity: "high" as const
-        });
-        if (hashtagCount >= 3) {
-          redFlags.push({
-            title: "Hashtag Spamming Pattern",
-            description: "Kepadatan hashtag di luar batas wajar penulisan organik, bertujuan manipulasi algoritma trending.",
-            severity: "medium" as const
-          });
-        }
-      } else if (matchedTriggers.length >= 1 || hashtagCount >= 1 || content.length < 35) {
-        isBuzzer = true;
-        threatLevel = 'medium';
-        confidenceScore = Math.min(74, 45 + (matchedTriggers.length * 8));
-        verdict = "Suspected Social Buzzer";
-        characteristics.push(
-          "Repetitive keyword signatures.",
-          "Targeted promotional/informational amplification indicators."
-        );
-        narratives.push(`Amplifying campaign topic relating to "${matchedTriggers[0] || 'social issue'}"`);
-        redFlags.push({
-          title: "Biased Narrative Distribution",
-          description: "Pendekatan penulisan satu arah yang berfokus mendorong sentimen bias kognitif spesifik.",
-          severity: "medium" as const
-        });
-      } else {
-        confidenceScore = Math.max(8, 12 + Math.floor(Math.random() * 15));
-        characteristics.push(
-          "Struktur tulisan bervariasi dengan alur penjelasan kasual orisinal.",
-          "Bebas dari koordinasi metadata inautentik (CIB)."
-        );
-        narratives.push("Opini individual natural masyarakat umum.");
-      }
-
-      // Calculate sentiment score
-      let sentimentScore = 10;
-      if (isBuzzer) {
-        if (lowercaseContent.includes('boikot') || lowercaseContent.includes('anti') || lowercaseContent.includes('hoax') || lowercaseContent.includes('fitnah') || lowercaseContent.includes('curang')) {
-          sentimentScore = -85;
-        } else {
-          sentimentScore = 75;
-        }
-      } else {
-        sentimentScore = Math.round(-30 + Math.random() * 60);
-      }
-
-      // Build professional summary
-      let summary = "";
-      if (verdict === "Coordinated Botnet Client") {
-        summary = "ANALISIS ANCAMAN SIBER: Ditemukan kecocokan tinggi (High Match) terhadap ciri khas Coordinated Inauthentic Behavior (CIB). Konten dicurigai merupakan bagian dari jaringan bot terorganisir yang menyebarkan komentar boilerplate secara massal.";
-      } else if (verdict === "Suspected Social Buzzer") {
-        summary = "ANALISIS ELEMEN MEDIA: Konten terindikasi bias tinggi untuk mendorong opini pihak tertentu secara tidak proporsional, pola penulisan mengarah ke teknik persuasi buzzer.";
-      } else {
-        summary = "ANALISIS AMAN: Teks berperilaku organik dan orisinal. Kecenderungan tulisan mengindikasikan akun pengguna nyata biasa tanpa sinyal otomatisasi atau agenda titipan.";
-      }
-
-      const responseObj = {
-        isBuzzer,
-        confidenceScore,
-        botCharacteristics: characteristics,
-        sentimentScore,
-        detectedNarratives: narratives,
-        summary,
-        redFlags,
-        verdict
-      };
-
-      return res.json(responseObj);
-
-    } catch (e: any) {
-      console.error("Local Threat Scan Error:", e);
-      return res.status(500).json({ error: "Sistem gagal menjalankan klasifikasi forensik lokal: " + e.message });
-    }
-  });
-
-  // Get active correlated network nodes & links
-  app.get("/api/network", (req, res) => {
-    res.json({ nodes: networkNodes, links: networkLinks });
-  });
-
-  // Scraper connection status
-  app.get("/api/scrapers/status", (req, res) => {
-    res.json({
-      twitter: !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token")),
-      youtube: true,
-      tiktok: !!(process.env.TIKTOK_MS_TOKEN && process.env.TIKTOK_MS_TOKEN.length > 10),
-    });
-  });
-
-  // H-2. Search Keyword Narrative OSINT discovery endpoint (Advanced Local Threat Intel Simulation Engine)
-  app.post("/api/social/search", async (req, res) => {
-    const { keyword } = req.body;
-    if (!keyword || keyword.trim() === "") {
-      return res.status(400).json({ error: "Keyword is required for discovery scanning." });
-    }
-
-    if (keyword === "Reset_Siber_Clean_Slate") {
-      campaigns = [];
-      accounts = [];
-      socialPosts = [];
-      dailyEngagement = [];
-      demographicsData = {
-        All: { ageBreakdown: [], genderBreakdown: [], regionBreakdown: [] },
-        X: { ageBreakdown: [], genderBreakdown: [], regionBreakdown: [] },
-        YouTube: { ageBreakdown: [], genderBreakdown: [], regionBreakdown: [] },
-        TikTok: { ageBreakdown: [], genderBreakdown: [], regionBreakdown: [] }
-      };
-      networkNodes = [];
-      networkLinks = [];
-      return res.json({ success: true, method: "reset" });
-    }
-
-    try {
-      console.log(`Processing local OSINT threat analysis for keyword: "${keyword}"`);
-      
-      const cleanKeyword = keyword.replace(/[\s#]+/g, "");
-      const tag1 = keyword.startsWith("#") ? keyword : `#${cleanKeyword}`;
-      const tag2 = `#Kawal${cleanKeyword}`;
-      const tag3 = `#Fakta${cleanKeyword}`;
-
-      // Run platform-specific scrapers on the user search keyword
-      const [twitterData, youtubeData, tiktokData] = await Promise.all([
-        runPythonScraper("twitter", keyword, 8),
-        runPythonScraper("youtube", keyword, 8),
-        runPythonScraper("tiktok", keyword, 8),
-      ]);
-      const scrapedData = [
-        ...(twitterData.results || []),
-        ...(youtubeData.results || []),
-        ...(tiktokData.results || []),
-      ];
-
-      const generatedAccounts: SuspiciousAccount[] = [];
-      const generatedPosts: SocialPost[] = [];
-      const extractedHashtags = new Set<string>();
-
-      if (scrapedData && scrapedData.length > 0) {
-        // Build live real-time siber datasets directly from scraped elements!
-        scrapedData.forEach((sItem, idx) => {
-          // Detect platform based on real URL, or cycle among targets
-          let platform: "X" | "TikTok" | "YouTube" = "X";
-          if (sItem.url.includes("tiktok.com")) {
-            platform = "TikTok";
-          } else if (sItem.url.includes("youtube.com") || sItem.url.includes("youtu.be")) {
-            platform = "YouTube";
-          } else if (idx % 3 === 1) {
-            platform = "TikTok";
-          } else if (idx % 3 === 2) {
-            platform = "YouTube";
-          }
-
-          // Extract hashtags from the parsed text
-          const hsMatch = sItem.snippet.match(/#\w+/g);
-          if (hsMatch) {
-            hsMatch.forEach(tag => extractedHashtags.add(tag));
-          }
-
-          // Formulate realistic username from target URL
-          let username = "";
-          const twMatch = sItem.url.match(/(?:twitter\.com|x\.com)\/([^/]+)/);
-          if (twMatch && !["home", "share", "intent", "search", "hashtag"].includes(twMatch[1].toLowerCase())) {
-            username = twMatch[1];
-          } else {
-            const ttMatch = sItem.url.match(/tiktok\.com\/@([^/]+)/);
-            if (ttMatch) {
-              username = ttMatch[1];
-            } else {
-              const ytMatch1 = sItem.url.match(/youtube\.com\/c\/([^/]+)/);
-              const ytMatch2 = sItem.url.match(/youtube\.com\/watch\?v=([^&]+)/);
-              const ytMatch3 = sItem.url.match(/youtube\.com\/@([^/]+)/);
-              if (ytMatch1) {
-                username = ytMatch1[1];
-              } else if (ytMatch2) {
-                username = ytMatch2[1].substring(0, 8);
-              } else if (ytMatch3) {
-                username = ytMatch3[1];
-              }
-            }
-          }
-
-          if (!username) {
-            try {
-              const uObj = new URL(sItem.url);
-              username = uObj.hostname.replace("www.", "").replace(/\./g, "_");
-            } catch {
-              username = `src_${idx + 1}`;
-            }
-          }
-
-          username = username.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase().substring(0, 15);
-          if (!username) {
-            username = `threat_actor_${idx + 1}`;
-          }
-
-          // Clean display name
-          let displayName = sItem.title.split("|")[0].split("-")[0].trim();
-          if (displayName.length > 25) {
-            displayName = displayName.substring(0, 22) + "...";
-          }
-          if (!displayName) {
-            displayName = `@${username}`;
-          }
-
-          // Compute bot inauthenticity threat score using real NLP indicators
-          let botScore = 20 + Math.floor(Math.random() * 25);
-          const snippetLower = sItem.snippet.toLowerCase();
-          const threatKeywords = ["boikot", "anti", "dukung", "bayaran", "palsu", "viral", "hoax", "fitnah", "giri", "gacor", "ready", "promo"];
-          const matchedWords = threatKeywords.filter(w => snippetLower.includes(w));
-          
-          if (matchedWords.length > 0) {
-            botScore += matchedWords.length * 15;
-          }
-          if (sItem.snippet.length < 50) {
-            botScore += 15;
-          }
-          botScore = Math.min(99, botScore);
-
-          let status: "Flagged" | "Under Investigation" | "Verified Bot" = "Under Investigation";
-          if (botScore >= 80) status = "Verified Bot";
-          else if (botScore >= 50) status = "Flagged";
-
-          // Add suspicious account entity
-          let existingAcc = generatedAccounts.find(a => a.username.toLowerCase() === username.toLowerCase());
-          if (!existingAcc) {
-            existingAcc = {
-              id: `acc-${Date.now()}-${idx}`,
-              username,
-              displayName,
-              platform,
-              followers: Math.floor(150 + Math.random() * 115000),
-              following: Math.floor(80 + Math.random() * 2100),
-              botScore,
-              status,
-              lastActive: "Baru saja",
-              reason: matchedWords.length > 0
-                ? `Mengamplifikasi narasi berciri khas inautentik: "${matchedWords.join(', ')}"`
-                : `Menyebarkan materi digital terdeteksi OSINT seputar topik "${keyword}"`,
-              recentCopypastaCount: Math.floor(1 + Math.random() * 15)
-            };
-            generatedAccounts.push(existingAcc);
-          }
-
-          // Add real scraped post
-          const lks = Math.floor(5 + Math.random() * 2100);
-          const cms = Math.floor(1 + Math.random() * 450);
-          const shs = Math.floor(1 + Math.random() * 630);
-          const rch = Math.floor((lks + cms + shs) * (4 + Math.random() * 6));
-          const er = parseFloat((((lks + cms + shs) / (rch || 1)) * 100).toFixed(2));
-
-          generatedPosts.push({
-            id: `post-gen-${Date.now()}-${idx}`,
-            platform,
-            authorUsername: username,
-            text: sItem.snippet,
-            postUrl: sItem.url,
-            publishedAt: new Date(Date.now() - idx * 10 * 60 * 60 * 1000).toISOString(),
-            likes: lks,
-            comments: cms,
-            shares: shs,
-            reach: rch,
-            engagementRate: er
-          });
-        });
-      }
-
-      // If empty or blocked by rate limit, use verified Indonesian regional siber archives
-      if (generatedPosts.length === 0) {
-        console.log(`[Scraper] Empty or rate-limited web index for "${keyword}". Initializing verified siber metadata indices.`);
-        const fallbackUsers = [
-          `kawal_${cleanKeyword.slice(0, 10).toLowerCase()}`,
-          `suara_rakyat_${cleanKeyword.slice(0, 8).toLowerCase()}`,
-          `cyber_guard_${cleanKeyword.slice(0, 8).toLowerCase()}`
-        ];
-        
-        fallbackUsers.forEach((u, i) => {
-          generatedAccounts.push({
-            id: `acc-${Date.now()}-${i}`,
-            username: u,
-            displayName: i === 0 ? `Kawal ${keyword}` : i === 1 ? "Suara Kemanusiaan" : "Siber Patroli",
-            platform: i === 0 ? "X" : i === 1 ? "TikTok" : "YouTube",
-            followers: Math.floor(1250 + Math.random() * 15000),
-            following: Math.floor(300 + Math.random() * 1000),
-            botScore: i === 0 ? 88 : i === 1 ? 65 : 45,
-            status: i === 0 ? "Verified Bot" : i === 1 ? "Flagged" : "Under Investigation",
-            lastActive: "1 menit lalu",
-            reason: `Kecocokan frekuensi posting sangat tinggi bertema sentimen massal isu "${keyword}".`,
-            recentCopypastaCount: 8 + i * 5
-          });
-
-          generatedPosts.push({
-            id: `post-gen-${Date.now()}-${i}`,
-            platform: i === 0 ? "X" : i === 1 ? "TikTok" : "YouTube",
-            authorUsername: u,
-            text: `Investigasi siber mendalam mendeteksi peningkatan laju amplifikasi percakapan terorganisir seputar isu "${keyword}". Mari bersikap bijak dan waspada siber.`,
-            postUrl: `https://${i === 0 ? 'twitter.com' : i === 1 ? 'tiktok.com' : 'youtube.com'}/search?q=${encodeURIComponent(keyword)}`,
-            publishedAt: new Date(Date.now() - i * 4 * 60 * 60 * 1000).toISOString(),
-            likes: Math.floor(150 + Math.random() * 2500),
-            comments: Math.floor(30 + Math.random() * 400),
-            shares: Math.floor(40 + Math.random() * 320),
-            reach: Math.floor(15000 + Math.random() * 45000),
-            engagementRate: 4.88
-          });
-        });
-      }
-
-      // Populate unique hashtags extracted, defaulting to seed keywords if sparse
-      if (extractedHashtags.size === 0) {
-        extractedHashtags.add(tag1);
-        extractedHashtags.add(tag2);
-        extractedHashtags.add(tag3);
-      }
-      const hashtagsArray = Array.from(extractedHashtags);
-
-      // Build campaigns from actual threat data
-      const campaignTitle = hashtagsArray[0] || tag1;
-      const generatedCampaigns: Campaign[] = [
-        {
-          id: `camp-${Date.now()}-1`,
-          title: campaignTitle,
-          description: scrapedData.length > 0 
-            ? `Kampanye manipulasi digital lokal terdeteksi aktif di Indonesia seputar topik "${keyword}". Ditemukan ${scrapedData.length} simpul percakapan ril dari internet.`
-            : `Hasil pencarian mendeteksi kampanye koordinasi polaritas siber inautentik (CIB) seputar isu "${keyword}". Mendorong agenda sentimen sepihak.`,
-          topic: 'Interferensi Opini Media',
-          platforms: Array.from(new Set(generatedPosts.map(p => p.platform))),
-          intensity: generatedPosts.some(p => p.engagementRate > 6.0) ? 'High' : 'Medium',
-          sentiment: 'Negative',
-          startDate: new Date().toISOString().split('T')[0],
-          status: 'Active',
-          botRatio: parseFloat((0.45 + Math.random() * 0.4).toFixed(2)),
-          reach: generatedPosts.reduce((acc, p) => acc + p.reach, 0),
-          hashtags: hashtagsArray.slice(0, 5),
-          keyNarrative: generatedPosts[0]?.text || `Mendorong amplifikasi percakapan bias satu arah tentang "${keyword}" secara massal.`,
-          buzzerCount: generatedAccounts.length * 3 + 4
-        }
-      ];
-
-      // Timeline entries spanning 14-days based on actual metrics
-      const baseLikes = generatedPosts.reduce((acc, p) => acc + p.likes, 0) || 1200;
-      const generatedTimeline: DailyEngagement[] = Array.from({ length: 14 }).map((_, i) => {
-        const date = new Date(Date.now() - (13 - i) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const multiplier = 0.3 + (i * 0.12) + (Math.random() * 0.15);
-        return {
-          date,
-          likes: Math.round(baseLikes * multiplier),
-          comments: Math.round((baseLikes / 4) * multiplier),
-          shares: Math.round((baseLikes / 3.5) * multiplier),
-          reach: Math.round((baseLikes * 7) * multiplier)
-        };
-      });
-
-      // Platform-specific baseline demographics
-      const baselineAge: Record<string, { category: string; value: number }[]> = {
-        X: [{ category: '13-17', value: 6 }, { category: '18-24', value: 48 }, { category: '25-34', value: 33 }, { category: '35-44', value: 9 }, { category: '45-54', value: 3 }, { category: '55+', value: 1 }],
-        YouTube: [{ category: '13-17', value: 15 }, { category: '18-24', value: 36 }, { category: '25-34', value: 28 }, { category: '35-44', value: 11 }, { category: '45-54', value: 7 }, { category: '55+', value: 3 }],
-        TikTok: [{ category: '13-17', value: 31 }, { category: '18-24', value: 47 }, { category: '25-34', value: 15 }, { category: '35-44', value: 5 }, { category: '45-54', value: 1 }, { category: '55+', value: 1 }],
-      };
-      const baselineGender: Record<string, { category: string; value: number }[]> = {
-        X: [{ category: 'Male', value: 58 }, { category: 'Female', value: 39 }, { category: 'Non-binary', value: 3 }],
-        YouTube: [{ category: 'Male', value: 55 }, { category: 'Female', value: 42 }, { category: 'Non-binary', value: 3 }],
-        TikTok: [{ category: 'Male', value: 40 }, { category: 'Female', value: 57 }, { category: 'Non-binary', value: 3 }],
-      };
-      const baselineRegion: Record<string, { category: string; value: number }[]> = {
-        X: [{ category: 'DKI Jakarta', value: 55 }, { category: 'Jawa Barat', value: 16 }, { category: 'Jawa Timur', value: 12 }, { category: 'Sumatera Utara', value: 9 }, { category: 'Sulawesi Selatan', value: 8 }],
-        YouTube: [{ category: 'DKI Jakarta', value: 37 }, { category: 'Jawa Barat', value: 24 }, { category: 'Jawa Timur', value: 16 }, { category: 'Sumatera Utara', value: 12 }, { category: 'Sulawesi Selatan', value: 11 }],
-        TikTok: [{ category: 'DKI Jakarta', value: 31 }, { category: 'Jawa Barat', value: 29 }, { category: 'Jawa Timur', value: 18 }, { category: 'Sumatera Utara', value: 12 }, { category: 'Sulawesi Selatan', value: 10 }],
-      };
-
-      // Count actual posts per platform from scraped data
-      const platformCounts: Record<string, number> = { X: 0, YouTube: 0, TikTok: 0 };
-      generatedPosts.forEach(p => { if (platformCounts[p.platform] !== undefined) platformCounts[p.platform]++; });
-      const totalPosts = generatedPosts.length || 1;
-      const platformWeight: Record<string, number> = {
-        X: platformCounts.X / totalPosts,
-        YouTube: platformCounts.YouTube / totalPosts,
-        TikTok: platformCounts.TikTok / totalPosts,
-      };
-
-      // Helper: weighted average of demographic segments across platforms
-      const weightedDemographics = (
-        baseline: Record<string, { category: string; value: number }[]>
-      ): { category: string; value: number }[] => {
-        const allCategories = new Set<string>();
-        Object.values(baseline).forEach(segments => segments.forEach(s => allCategories.add(s.category)));
-        return Array.from(allCategories).map(cat => {
-          let weighted = 0;
-          for (const plat of ['X', 'YouTube', 'TikTok'] as const) {
-            const seg = baseline[plat].find(s => s.category === cat);
-            if (seg) weighted += seg.value * platformWeight[plat];
-          }
-          const variance = Math.max(-3, Math.min(3, (keyword.length % 7) - 3));
-          return { category: cat, value: Math.round(Math.max(1, weighted + variance * (cat === 'Non-binary' ? 0.5 : 1))) };
-        });
-      };
-
-      const ageAll = weightedDemographics(baselineAge);
-      const genderAll = weightedDemographics(baselineGender);
-      const regionAll = weightedDemographics(baselineRegion);
-
-      // Normalize each array to sum to 100
-      const normalize = (arr: { category: string; value: number }[]) => {
-        const sum = arr.reduce((a, b) => a + b.value, 0);
-        if (sum === 0) return arr;
-        // adjust largest to make exactly 100
-        const diff = 100 - sum;
-        const max = arr.reduce((a, b) => a.value > b.value ? a : b);
-        max.value += diff;
-        return arr;
-      };
-
-      // Build per-platform demographics (slight variance so each scan is unique)
-      const perPlatform = (plat: 'X' | 'YouTube' | 'TikTok', jitter: number): AudienceDemographics => {
-        const jitterAge = (v: number) => Math.max(1, v + Math.round((Math.random() - 0.5) * jitter));
-        const jitterGender = (v: number) => Math.max(1, v + Math.round((Math.random() - 0.5) * (jitter * 0.6)));
-        return {
-          ageBreakdown: normalize(baselineAge[plat].map(s => ({ ...s, value: jitterAge(s.value) }))),
-          genderBreakdown: normalize(baselineGender[plat].map(s => ({ ...s, value: jitterGender(s.value) }))),
-          regionBreakdown: normalize(baselineRegion[plat].map(s => ({ ...s, value: jitterAge(s.value) }))),
-        };
-      };
-
-      const generatedDemographics: Record<string, AudienceDemographics> = {
-        All: { ageBreakdown: normalize(ageAll), genderBreakdown: normalize(genderAll), regionBreakdown: normalize(regionAll) },
-        X: perPlatform('X', 4),
-        YouTube: perPlatform('YouTube', 4),
-        TikTok: perPlatform('TikTok', 4),
-      };
-
-      // Construct live dynamic expanded Network Graph mapping
-      const generatedNodes: NetworkNode[] = [
-        { id: 'narrative-main', label: `${keyword.substring(0, 16)} Hub`, group: 'campaign', size: 28 },
-        { id: 'master-1', label: 'PR Agency Bot Controller', group: 'buzzer_master', size: 22, botScore: 84 },
-        { id: 'master-2', label: 'Political Ops Master', group: 'buzzer_master', size: 20, botScore: 78 },
-        { id: 'master-3', label: 'Influence Broker', group: 'buzzer_master', size: 20, botScore: 82 },
-        // Platform sub-hubs
-        { id: 'platform-x', label: 'X Platform Hub', group: 'platform_hub', size: 16, platform: 'X' },
-        { id: 'platform-youtube', label: 'YouTube Platform Hub', group: 'platform_hub', size: 16, platform: 'YouTube' },
-        { id: 'platform-tiktok', label: 'TikTok Platform Hub', group: 'platform_hub', size: 16, platform: 'TikTok' },
-      ];
-      const generatedLinks: NetworkLink[] = [
-        { source: 'narrative-main', target: 'master-1', value: 8 },
-        { source: 'narrative-main', target: 'master-2', value: 7 },
-        { source: 'narrative-main', target: 'master-3', value: 7 },
-        { source: 'master-1', target: 'platform-x', value: 6 },
-        { source: 'master-2', target: 'platform-youtube', value: 6 },
-        { source: 'master-3', target: 'platform-tiktok', value: 6 },
-      ];
-
-      // Add hashtags mapping (up to 6)
-      hashtagsArray.slice(0, 6).forEach((tag, idx) => {
-        generatedNodes.push({
-          id: `hash-${idx + 1}`,
-          label: tag,
-          group: 'hashtag',
-          size: 18
-        });
-        const masterTarget = idx < 2 ? 'master-1' : idx < 4 ? 'master-2' : 'master-3';
-        generatedLinks.push({
-          source: masterTarget,
-          target: `hash-${idx + 1}`,
-          value: 9 - idx
-        });
-        generatedLinks.push({
-          source: 'narrative-main',
-          target: `hash-${idx + 1}`,
-          value: 6 - idx
-        });
-      });
-
-      // Add accounts mapping (up to 20)
-      generatedAccounts.slice(0, 20).forEach((acc, idx) => {
-        const platformLabel = acc.platform || (idx % 3 === 0 ? 'X' : idx % 3 === 1 ? 'YouTube' : 'TikTok');
-        const post = generatedPosts[idx];
-        generatedNodes.push({
-          id: `bot-${idx + 1}`,
-          label: `@${acc.username || `user${idx + 1}`}`,
-          group: 'buzzer_node',
-          size: 11,
-          botScore: acc.botScore || Math.floor(40 + Math.random() * 55),
-          platform: platformLabel,
-          postText: post?.text || "",
-          postUrl: post?.postUrl || ""
-        });
-
-        const hashCount = Math.min(6, hashtagsArray.length);
-        const targetHashId = `hash-${(idx % hashCount) + 1}`;
-        generatedLinks.push({
-          source: targetHashId,
-          target: `bot-${idx + 1}`,
-          value: Math.floor(4 + Math.random() * 5)
-        });
-      });
-
-      // Assign returned siber intelligence dataset parsed directly into deep local memory
-      campaigns = generatedCampaigns;
-      accounts = generatedAccounts;
-      socialPosts = generatedPosts;
-      dailyEngagement = generatedTimeline;
-      demographicsData = generatedDemographics;
-      networkNodes = generatedNodes;
-      networkLinks = generatedLinks;
-
-      return res.json({ success: true, method: "scraped_offline" });
-
-    } catch (apiError: any) {
-      console.error("Failed to compile local threat graph:", apiError);
-      return res.status(500).json({ error: apiError.message || "Gagal melakukan pencarian siber real-time." });
-    }
-  });
-
-  // 6. Vite Integrations
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+  // If no scrapers returned results, force fallback to synthetic
+  if (nonEmpty.length === 0) {
+    console.warn("All scrapers returned 0 results, switching to synthetic data");
+    generateKeywordData(keyword);
+    return;
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Buzzer Tracker running on port ${PORT}`);
+  scrapedTimeline = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - 13 + i);
+    return {
+      date: d.toISOString().slice(0, 10),
+      likes: Math.floor(200 + Math.random() * 800),
+      comments: Math.floor(50 + Math.random() * 300),
+      shares: Math.floor(20 + Math.random() * 150),
+      reach: Math.floor(5000 + Math.random() * 20000),
+    };
   });
 }
 
-startServer();
+// ---------- Copypasta similarity engine ----------
+function jaccardSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\W+/).filter(Boolean));
+  const wordsB = new Set(b.toLowerCase().split(/\W+/).filter(Boolean));
+  if (wordsA.size === 0 && wordsB.size === 0) return 0;
+  const intersection = new Set([...wordsA].filter(w => wordsB.has(w)));
+  const union = new Set([...wordsA, ...wordsB]);
+  return intersection.size / union.size;
+}
+
+async function computeBuzzerScores() {
+  // Group posts by author
+  const authorPosts = new Map<string, string[]>();
+  scrapedPosts.forEach((p: any) => {
+    const key = `${p.platform}:${p.authorUsername}`;
+    if (!authorPosts.has(key)) authorPosts.set(key, []);
+    authorPosts.get(key)!.push(p.text);
+  });
+
+  // Try AI-enhanced analysis if Gemini key is available
+  let aiScores: Record<string, number> | null = null;
+  try {
+    const key = await geminiRepo.getKey();
+    if (key && authorPosts.size > 0) {
+      const batchPrompt = `Analyze these social media posts for coordinated inauthentic behavior (copypasta, botnet coordination). 
+For each author, return a JSON object with key = author key (format: "Platform:username") and value = buzzer score 0-100.
+Score based on: text similarity between posts, posting frequency, repetition of phrases, coordinated timing patterns.
+Only respond with valid JSON, no markdown, no explanation.
+
+Authors and their posts:
+${Array.from(authorPosts.entries()).slice(0, 20).map(([author, texts]) => 
+  `${author}:\n${texts.map((t, i) => `  [${i + 1}] ${t.slice(0, 150)}`).join('\n')}`
+).join('\n\n')}`;
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: batchPrompt }] }]
+        })
+      });
+      const result: any = await response.json();
+      const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        const cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+          aiScores = parsed;
+          console.log('[AI Copypasta] Gemini analysis completed for', Object.keys(aiScores).length, 'authors');
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[AI Copypasta] Gemini call failed, falling back to Jaccard:', (err as Error)?.message);
+  }
+
+  // Compute scores (AI-enhanced or Jaccard fallback)
+  const authorScores = new Map<string, number>();
+  for (const [author, texts] of authorPosts) {
+    if (aiScores && aiScores[author] !== undefined) {
+      authorScores.set(author, Math.min(99, Math.max(15, aiScores[author])));
+      continue;
+    }
+    if (texts.length < 2) {
+      authorScores.set(author, Math.floor(30 + Math.random() * 30));
+      continue;
+    }
+    let totalSim = 0;
+    let pairs = 0;
+    for (let i = 0; i < texts.length; i++) {
+      for (let j = i + 1; j < texts.length; j++) {
+        totalSim += jaccardSimilarity(texts[i], texts[j]);
+        pairs++;
+      }
+    }
+    const avgSim = pairs > 0 ? totalSim / pairs : 0;
+    const freqBonus = Math.min(20, texts.length * 5);
+    const score = Math.min(99, Math.round(avgSim * 70 + freqBonus));
+    authorScores.set(author, Math.max(15, score));
+  }
+
+  // Update account buzzer scores
+  scrapedAccounts.forEach((a: any) => {
+    const key = `${a.platform}:${a.username}`;
+    if (authorScores.has(key)) {
+      a.botScore = authorScores.get(key)!;
+    }
+  });
+}
+
+// ---------- AI Campaign Brief ----------
+async function generateCampaignBrief(campaign: any): Promise<string> {
+  try {
+    const key = await geminiRepo.getKey();
+    if (!key) return briefFallback(campaign);
+    const prompt = `Generate a concise intelligence brief (2-3 sentences in Indonesian) for this disinformation campaign:
+Title: ${campaign.title}
+Platform: ${campaign.platforms?.join(', ')}
+Topic: ${campaign.topic}
+Intensity: ${campaign.intensity}
+Bot Ratio: ${Math.round((campaign.botRatio || 0) * 100)}%
+Posts tracked: ${campaign.buzzerCount || 0}
+Hashtags: ${(campaign.hashtags || []).join(', ')}
+Narrative: ${campaign.keyNarrative || 'Unknown'}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    const result: any = await response.json();
+    return result?.candidates?.[0]?.content?.parts?.[0]?.text || briefFallback(campaign);
+  } catch {
+    return briefFallback(campaign);
+  }
+}
+
+function briefFallback(campaign: any): string {
+  const templates = [
+    `Kampanye "${campaign.title}" terdeteksi di ${campaign.platforms?.[0] || 'multi-platform'} dengan intensitas ${campaign.intensity}. ${Math.round((campaign.botRatio || 0) * 100)}% aktivitas terindikasi dari akun buzter terkoordinasi.`,
+    `Koordinasi buzzer terdeteksi pada topik "${campaign.topic}" — ${campaign.buzzerCount || 0} postingan terpantau dengan narasi "${campaign.keyNarrative || 'amplifikasi buatan'}"`,
+    `Peringatan: Kampanye "${campaign.title}" menunjukkan pola koordinasi sistematis. Rasio buzzer ${Math.round((campaign.botRatio || 0) * 100)}% — memerlukan investigasi lebih lanjut.`
+  ];
+  return templates[Math.floor(Math.random() * templates.length)];
+}
+
+// ---------- AI Account Brief ----------
+async function generateAccountBrief(account: any): Promise<string> {
+  try {
+    const key = await geminiRepo.getKey();
+    if (!key) return accountBriefFallback(account);
+    const prompt = `Analisis akun media sosial ini dalam 2-3 kalimat Bahasa Indonesia:
+Username: ${account.username}
+Platform: ${account.platform}
+Skor Buzzer: ${account.botScore}/100
+Followers: ${account.followers}
+Following: ${account.following}
+Copypasta Count: ${account.recentCopypastaCount || 0}
+Status: ${account.status}
+Alasan: ${account.reason}
+
+Beri penilaian: apakah ini akun buzzer terkoordinasi, bot otomatis, atau pengguna asli? Sebutkan pola mencurigakan yang terdeteksi.`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    const result: any = await response.json();
+    return result?.candidates?.[0]?.content?.parts?.[0]?.text || accountBriefFallback(account);
+  } catch {
+    return accountBriefFallback(account);
+  }
+}
+
+function accountBriefFallback(account: any): string {
+  const level = account.botScore > 80 ? 'Tinggi' : account.botScore > 50 ? 'Sedang' : 'Rendah';
+  return `Akun @${account.username} di ${account.platform} memiliki skor buzzer ${level} (${account.botScore}%). ${account.recentCopypastaCount > 5 ? `Terdeteksi ${account.recentCopypastaCount} pola copypasta — indikasi kuat koordinasi buzzer.` : 'Pola aktivitas masih dalam batas wajar, namun direkomendasikan pemantauan lanjutan.'} ${account.followers < 100 ? 'Jumlah follower rendah tidak sebanding dengan aktivitas.' : ''}`;
+}
+
+// ---------- Auto-labeling Posts ----------
+async function autoLabelPosts(): Promise<void> {
+  if (scrapedPosts.length === 0) return;
+  try {
+    const key = await geminiRepo.getKey();
+    if (!key) return;
+    
+    const batchSize = 10;
+    for (let i = 0; i < Math.min(scrapedPosts.length, batchSize); i++) {
+      const post = scrapedPosts[i];
+      if (post.label) continue;
+      
+      const prompt = `Classify this social media post into ONE category: "propaganda", "copypasta", "genuine", or "spam".
+Only respond with the category word, nothing else.
+
+Post: "${post.text.slice(0, 200)}"
+Platform: ${post.platform}
+Author: ${post.authorUsername}`;
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const result: any = await response.json();
+      const label = result?.candidates?.[0]?.content?.parts?.[0]?.text?.toLowerCase().trim();
+      if (['propaganda', 'copypasta', 'genuine', 'spam'].includes(label)) {
+        post.label = label;
+      }
+    }
+    console.log(`[Auto-label] Labeled ${scrapedPosts.filter((p: any) => p.label).length}/${scrapedPosts.length} posts`);
+  } catch (err) {
+    console.warn('[Auto-label] Failed:', (err as Error)?.message);
+  }
+}
+
+// ---------- Sentiment Timeline ----------
+function computeSentimentTimeline() {
+  const dayBuckets = new Map<string, { pos: number; neg: number; neu: number; total: number }>();
+  scrapedPosts.forEach((p: any) => {
+    const day = p.publishedAt ? p.publishedAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    if (!dayBuckets.has(day)) dayBuckets.set(day, { pos: 0, neg: 0, neu: 0, total: 0 });
+    const b = dayBuckets.get(day)!;
+    b.total++;
+    // Simple keyword-based sentiment
+    const text = (p.text || '').toLowerCase();
+    if (/baik|dukung|setuju|hebat|keren|salut/.test(text)) b.pos++;
+    else if (/tolak|jahat|bohong|penipuan|jelek|benci/.test(text)) b.neg++;
+    else b.neu++;
+  });
+  return Array.from(dayBuckets.entries()).map(([date, v]) => ({
+    date,
+    positive: Math.round((v.pos / v.total) * 100),
+    negative: Math.round((v.neg / v.total) * 100),
+    neutral: Math.round((v.neu / v.total) * 100),
+  }));
+}
+
+// ---------- In-memory store for scraped data ----------
+let scrapedCampaigns: any[] = [];
+let scrapedAccounts: any[] = [];
+let scrapedPosts: any[] = [];
+let scrapedTimeline: any[] = [];
+
+async function generateKeywordData(keyword: string) {
+  const id = Date.now().toString();
+  const platforms = ['X', 'TikTok', 'YouTube'];
+  const intensity = ['Low', 'Medium', 'High', 'Critical'];
+  const sentiments = ['Positive', 'Negative', 'Neutral', 'Mixed'];
+  const statuses = ['Active', 'Active', 'Monitoring'];
+  const stats = ['Flagged', 'Under Investigation', 'Verified Buzzer', 'Suspended'];
+
+  scrapedCampaigns = Array.from({ length: 3 }, (_, i) => ({
+    id: `camp-${id}-${i}`,
+    title: `${keyword} Campaign ${i + 1}`,
+    description: `Organized disinformation campaign around "${keyword}" detected across social platforms.`,
+    topic: keyword,
+    platforms: [platforms[i % 3]],
+    intensity: intensity[i % 4],
+    sentiment: sentiments[i % 4],
+    startDate: new Date().toISOString().slice(0, 10),
+    status: statuses[i % 3],
+    botRatio: 0.5 + Math.random() * 0.45,
+    reach: Math.floor(50000 + Math.random() * 200000),
+    hashtags: [`#${keyword}`, `#${keyword}Now`, `#Dukung${keyword}`],
+    keyNarrative: `Coordinated amplification of "${keyword}" narrative using copypasta and hashtag spamming.`,
+    buzzerCount: Math.floor(10 + Math.random() * 90),
+  }));
+
+  scrapedAccounts = Array.from({ length: 5 }, (_, i) => ({
+    id: `acc-${id}-${i}`,
+    username: `buzzer_${keyword}_${i}`,
+    displayName: `Buzzer ${keyword} #${i}`,
+    platform: platforms[i % 3],
+    followers: Math.floor(100 + Math.random() * 5000),
+    following: Math.floor(500 + Math.random() * 3000),
+    botScore: Math.floor(60 + Math.random() * 40),
+    status: stats[i % 4],
+    lastActive: new Date().toISOString(),
+    reason: `Suspected coordination in "${keyword}" disinformation network.`,
+    recentCopypastaCount: Math.floor(3 + Math.random() * 20),
+  }));
+
+  scrapedPosts = Array.from({ length: 8 }, (_, i) => ({
+    id: `post-${id}-${i}`,
+    platform: platforms[i % 3],
+    authorUsername: `user_${keyword}_${i}`,
+    text: `${keyword} is a trending topic! #${keyword} #viral ${i % 2 === 0 ? 'Dukung terus!' : 'Tolak!'}`,
+    postUrl: `https://${platforms[i % 3].toLowerCase()}.com/post/${id}-${i}`,
+    publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
+    likes: Math.floor(50 + Math.random() * 500),
+    comments: Math.floor(10 + Math.random() * 100),
+    shares: Math.floor(5 + Math.random() * 200),
+    reach: Math.floor(1000 + Math.random() * 10000),
+    engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+  }));
+
+  scrapedTimeline = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - 13 + i);
+    return {
+      date: d.toISOString().slice(0, 10),
+      likes: Math.floor(200 + Math.random() * 800),
+      comments: Math.floor(50 + Math.random() * 300),
+      shares: Math.floor(20 + Math.random() * 150),
+      reach: Math.floor(5000 + Math.random() * 20000),
+    };
+  });
+  await computeBuzzerScores();
+  autoLabelPosts();
+}
+
+// ---------- Social / Network / Report Routes ----------
+app.get("/api/social/accounts", (_req, res) => {
+  res.json(scrapedAccounts);
+});
+
+app.get("/api/social/posts", (_req, res) => {
+  res.json(scrapedPosts);
+});
+
+app.get("/api/social/demographics", (req, res) => {
+  const platform = (req.query as any)?.platform || 'All';
+  let filtered = scrapedAccounts;
+  if (platform !== 'All') filtered = scrapedAccounts.filter((a: any) => a.platform === platform);
+  const total = filtered.length || 1;
+
+  const ageBuckets: Record<string, number> = { '18-24': 0, '25-34': 0, '35-44': 0, '45+': 0 };
+  const genderBuckets: Record<string, number> = { Male: 0, Female: 0, Other: 0 };
+  const regionBuckets: Record<string, number> = {};
+
+  filtered.forEach((a: any) => {
+    // Age: estimate from botScore (higher score → younger demographic bias)
+    const ageRand = (a.botScore || 50) + Math.random() * 30;
+    if (ageRand < 30) ageBuckets['18-24']++;
+    else if (ageRand < 50) ageBuckets['25-34']++;
+    else if (ageRand < 70) ageBuckets['35-44']++;
+    else ageBuckets['45+']++;
+
+    // Gender: weighted random based on platform
+    const genderSeed = ((a.botScore || 50) * 7 + a.followers) % 100;
+    if (genderSeed < 50) genderBuckets.Male++;
+    else if (genderSeed < 90) genderBuckets.Female++;
+    else genderBuckets.Other++;
+
+    // Region: based on platform + username hash
+    const regionKey = a.platform === 'X' ? 'Indonesia' : a.platform === 'YouTube' ? 'Malaysia' : 'Other';
+    regionBuckets[regionKey] = (regionBuckets[regionKey] || 0) + 1;
+  });
+
+  res.json({
+    ageBreakdown: Object.entries(ageBuckets).map(([category, value]) => ({ category, value: Math.round((value / total) * 100) })),
+    genderBreakdown: Object.entries(genderBuckets).map(([category, value]) => ({ category, value: Math.round((value / total) * 100) })),
+    regionBreakdown: Object.entries(regionBuckets).map(([category, value]) => ({ category, value: Math.round((value / total) * 100) })),
+  });
+});
+
+app.post("/api/proxy/gemini/generate", async (req, res) => {
+  const { model, key } = req.query;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+    console.log(`[Proxy] Redirecting to Gemini: ${url}`);
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    console.error(`[Proxy] Gemini Error:`, err);
+    res.status(500).json({ error: "Gemini proxy failed" });
+  }
+});
+
+app.post("/api/proxy/openrouter/chat", async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    const url = `https://openrouter.ai/api/v1/chat/completions`;
+    console.log(`[Proxy] Redirecting to OpenRouter: ${url}`);
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 
+        'Authorization': auth || '', 
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://buzztrack.ai',
+        'X-Title': 'BuzzTrack AI'
+      },
+      body: JSON.stringify(req.body)
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    console.error(`[Proxy] OpenRouter Error:`, err);
+    res.status(500).json({ error: "OpenRouter proxy failed" });
+  }
+});
+
+app.get("/api/proxy/models/openrouter", async (_req, res) => {
+  try {
+    const resp = await fetch('https://openrouter.ai/api/v1/models');
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to proxy OpenRouter models" });
+  }
+});
+
+app.get("/api/proxy/models/gemini", async (req, res) => {
+  try {
+    const key = req.query.key;
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${key}`);
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to proxy Gemini models" });
+  }
+});
+
+// API Routes
+app.post("/api/proxy/gemini/generate", async (req, res) => {
+  const { model, key } = req.query;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Gemini proxy failed" });
+  }
+});
+
+app.post("/api/proxy/openrouter/chat", async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    const url = `https://openrouter.ai/api/v1/chat/completions`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 
+        'Authorization': auth || '', 
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://buzztrack.ai',
+        'X-Title': 'BuzzTrack AI'
+      },
+      body: JSON.stringify(req.body)
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "OpenRouter proxy failed" });
+  }
+});
+
+app.get("/api/proxy/models/openrouter", async (_req, res) => {
+  try {
+    const resp = await fetch('https://openrouter.ai/api/v1/models');
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to proxy OpenRouter models" });
+  }
+});
+
+app.get("/api/proxy/models/gemini", async (req, res) => {
+  try {
+    const key = req.query.key;
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${key}`);
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to proxy Gemini models" });
+  }
+});
+
+app.get("/api/social/engagement", (_req, res) => {
+  res.json(scrapedTimeline);
+});
+
+app.get("/api/social/auth/url", (req, res) => {
+  res.json({ url: "", real: false });
+});
+
+app.post("/api/social/connect", (req, res) => {
+  res.json({ success: false, account: null });
+});
+
+app.post("/api/social/disconnect", (req, res) => {
+  res.json({ success: false });
+});
+
+app.post("/api/social/sync", (req, res) => {
+  res.json({ success: false, message: "No social API keys configured." });
+});
+
+app.post("/api/social/search", async (req, res) => {
+  const { keyword } = req.body;
+  if (!keyword || keyword === "Reset_Siber_Clean_Slate") {
+    scrapedCampaigns = [];
+    scrapedAccounts = [];
+    scrapedPosts = [];
+    scrapedTimeline = [];
+    return res.json({ success: true, method: "reset" });
+  }
+
+  // Try real Python scrapers first (skip if DISABLE_PYTHON_SCRAPERS=true, or if required credentials are missing)
+  let twitter = { success: false, platform: 'X', error: 'disabled' };
+  let youtube = { success: false, platform: 'YouTube', error: 'disabled' };
+  let tiktok = { success: false, platform: 'TikTok', error: 'disabled' };
+  const twitterConfigured = !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token"));
+  const youtubeConfigured = !!(process.env.YOUTUBE_API_KEY);
+  const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN);
+
+  if (!process.env.DISABLE_PYTHON_SCRAPERS) {
+    const scraperPromises: Promise<any>[] = [];
+    if (twitterConfigured) scraperPromises.push(runPythonScraper("twitter", keyword, 50));
+    if (youtubeConfigured) scraperPromises.push(runPythonScraper("youtube", keyword, 50));
+    if (tiktokConfigured) scraperPromises.push(runPythonScraper("tiktok", keyword, 50));
+    if (scraperPromises.length === 0) {
+      console.log("No scrapers configured — check .env for credentials");
+    } else {
+      const results = await Promise.all(scraperPromises);
+      results.forEach(r => {
+        if (r.platform === 'X') twitter = r;
+        else if (r.platform === 'YouTube') youtube = r;
+        else if (r.platform === 'TikTok') tiktok = r;
+      });
+    }
+  } else {
+    console.log("Python scrapers disabled via DISABLE_PYTHON_SCRAPERS env var");
+  }
+
+  const succeeded = [twitter, youtube, tiktok].filter(r => r.success === true);
+  const hasRealData = succeeded.some(r => r.results && r.results.length > 0);
+
+  if (succeeded.length > 0 && hasRealData) {
+    mapScraperResults(succeeded, keyword);
+    await computeBuzzerScores();
+  } else {
+    if (succeeded.length > 0 && !hasRealData) {
+      console.warn("Scrapers connected but returned 0 results, using synthetic data");
+    } else {
+      console.warn("All Python scrapers failed, using synthetic data:", { twitter: twitter.error, youtube: youtube.error, tiktok: tiktok.error });
+    }
+    generateKeywordData(keyword);
+  }
+  res.json({
+    success: true,
+    method: scrapedAccounts.length > 0 ? (hasRealData ? "python" : "synthetic") : "synthetic",
+    keyword,
+    campaigns: scrapedCampaigns,
+    accounts: scrapedAccounts,
+  });
+});
+
+app.get("/api/network", (_req, res) => {
+  const platformSet = new Set<string>();
+  scrapedCampaigns.forEach(c => c.platforms?.forEach((p: string) => platformSet.add(p)));
+  scrapedAccounts.forEach(a => { if (a.platform) platformSet.add(a.platform); });
+
+  const platformHubs = Array.from(platformSet).map((p, i) => ({
+    id: `hub-${p.toLowerCase().replace(/\s+/g, '')}`,
+    label: `${p} Hub`,
+    group: 'platform_hub',
+    size: 18,
+    platform: p,
+  }));
+
+  const hashtagNodes: any[] = [];
+  const hashtagMap = new Map<string, string[]>();
+  scrapedCampaigns.forEach(c => {
+    (c.hashtags || []).forEach((tag: string) => {
+      const key = tag.replace(/^#/, '').toLowerCase();
+      if (!hashtagMap.has(key)) {
+        const id = `tag-${key}`;
+        hashtagNodes.push({ id, label: tag, group: 'hashtag', size: 14, platform: '' });
+        hashtagMap.set(key, []);
+      }
+      hashtagMap.get(key)!.push(c.id);
+    });
+  });
+
+  const sortedAccounts = [...scrapedAccounts].sort((a, b) => b.botScore - a.botScore);
+  const masterNodes = sortedAccounts.slice(0, Math.min(3, sortedAccounts.length)).map(a => ({
+    id: `master-${a.id}`,
+    label: `@${a.username}`,
+    group: 'buzzer_master',
+    size: 16,
+    botScore: a.botScore,
+    platform: a.platform || '',
+  }));
+
+  const nodes: any[] = [
+    ...scrapedCampaigns.map(c => ({
+      id: c.id,
+      label: c.title,
+      group: 'campaign',
+      size: 20 + c.buzzerCount / 5,
+      platform: c.platforms?.[0] || '',
+      botScore: c.botRatio ? Math.floor(c.botRatio * 100) : 50,
+    })),
+    ...scrapedAccounts.map(a => ({
+      id: a.id,
+      label: `@${a.username}`,
+      group: 'buzzer',
+      size: 10 + a.botScore / 10,
+      botScore: a.botScore,
+      platform: a.platform || '',
+    })),
+    ...platformHubs,
+    ...hashtagNodes,
+    ...masterNodes,
+  ];
+
+  const links: any[] = [];
+
+  // Campaign → Platform Hub
+  scrapedCampaigns.forEach(c => {
+    (c.platforms || []).forEach((p: string) => {
+      const hubId = `hub-${p.toLowerCase().replace(/\s+/g, '')}`;
+      links.push({ source: c.id, target: hubId, value: 80 });
+    });
+    // Campaign → Hashtag
+    (c.hashtags || []).forEach((tag: string) => {
+      const tagId = `tag-${tag.replace(/^#/, '').toLowerCase()}`;
+      links.push({ source: c.id, target: tagId, value: 70 });
+    });
+    // Campaign → Suspicious
+    scrapedAccounts.forEach(a => {
+      links.push({ source: c.id, target: a.id, value: Math.floor(30 + Math.random() * 70) });
+    });
+  });
+
+  // Hashtag → Buzzer Master
+  hashtagNodes.forEach(h => {
+    const tagKey = h.label.replace(/^#/, '').toLowerCase();
+    const linkedCampaigns = hashtagMap.get(tagKey) || [];
+    masterNodes.forEach(m => {
+      // Connect master to hashtag if same platform or any
+      links.push({ source: h.id, target: m.id, value: 60 });
+    });
+  });
+
+  // Buzzer Master → Buzzer (master controls buzzer accounts)
+  masterNodes.forEach(m => {
+    const platformBuzzers = scrapedAccounts.filter(a => a.platform === m.platform && a.id !== m.id.replace('master-', ''));
+    platformBuzzers.slice(0, 4).forEach(a => {
+      links.push({ source: m.id, target: a.id, value: 90 });
+    });
+  });
+
+  res.json({ nodes, links });
+});
+
+app.get("/api/account/:id/brief", async (req, res) => {
+  const account = scrapedAccounts.find((a: any) => a.id === req.params.id);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const brief = await generateAccountBrief(account);
+  res.json({ brief });
+});
+
+app.get("/api/account/:id/posts", (req, res) => {
+  const account = scrapedAccounts.find((a: any) => a.id === req.params.id);
+  if (!account) return res.json([]);
+  const posts = scrapedPosts.filter((p: any) =>
+    p.authorUsername === account.username && p.platform === account.platform
+  ).slice(0, 10);
+  res.json(posts);
+});
+
+app.get("/api/social/sentiment-timeline", (_req, res) => {
+  res.json(computeSentimentTimeline());
+});
+
+app.get("/api/campaign/:id/brief", async (req, res) => {
+  const campaign = scrapedCampaigns.find((c: any) => c.id === req.params.id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  const brief = await generateCampaignBrief(campaign);
+  res.json({ brief });
+});
+
+app.get("/api/scrapers/status", (_req, res) => {
+  const tweets = scrapedPosts.filter((p: any) => p.platform === 'X').length;
+  const ytPosts = scrapedPosts.filter((p: any) => p.platform === 'YouTube').length;
+  const tkPosts = scrapedPosts.filter((p: any) => p.platform === 'TikTok').length;
+  res.json({
+    twitter: !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token")),
+    youtube: !!(process.env.YOUTUBE_API_KEY || (process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET)),
+    tiktok: !!(process.env.TIKTOK_MS_TOKEN),
+    postCounts: { twitter: tweets, youtube: ytPosts, tiktok: tkPosts },
+    totalPosts: scrapedPosts.length,
+    totalAccounts: scrapedAccounts.length,
+    lastSync: new Date().toISOString(),
+  });
+});
+
+app.get("/api/deep-alert", async (_req, res) => {
+  // Logika deteksi kritis simulasi
+  const critical = Math.random() < 0.05; 
+  res.json({ isCritical: critical, message: 'Deteksi lonjakan aktivitas anomali terkoordinasi!' });
+});
+
+app.get("/api/trend", async (_req, res) => {
+  // Ambil data sentimen untuk hari ini
+  res.json(computeSentimentTimeline().slice(-1));
+});
+
+app.get("/api/trend/daily", async (_req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const todayPosts = scrapedPosts.filter((p: any) =>
+    p.publishedAt?.startsWith(today)
+  );
+
+  const platforms: Record<string, any> = {};
+  const platformKeys = ['X', 'YouTube', 'TikTok'];
+
+  platformKeys.forEach(pl => {
+    const plPosts = todayPosts.filter((p: any) => p.platform === pl);
+    const hashtags = plPosts.flatMap((p: any) => {
+      const tags = (p.text || '').match(/#\w+/g) || [];
+      return tags;
+    });
+    const topHashtags = [...new Set(hashtags)].slice(0, 5);
+    const totalEngagement = plPosts.reduce((sum: number, p: any) => sum + (p.likes || 0) + (p.comments || 0) + (p.shares || 0), 0);
+    const sentiment = plPosts.filter((p: any) => (p.text || '').toLowerCase().includes('boikot') || (p.text || '').toLowerCase().includes('gagal')).length > plPosts.length / 3 ? 'Negative' : plPosts.length > 0 ? 'Neutral' : 'N/A';
+
+    platforms[pl] = {
+      postCount: plPosts.length,
+      totalEngagement,
+      topHashtags,
+      avgSentiment: sentiment,
+      topPosts: plPosts.slice(0, 3).map((p: any) => ({ text: p.text?.slice(0, 100), url: p.postUrl }))
+    };
+  });
+
+  const sortedPlatforms = Object.entries(platforms).sort((a, b) => b[1].postCount - a[1].postCount);
+  const dominantPlatform = sortedPlatforms.length > 0 ? sortedPlatforms[0][0] : 'N/A';
+  const totalPosts = todayPosts.length;
+
+  res.json({
+    date: today,
+    generatedAt: Date.now(),
+    platforms,
+    totalPosts,
+    dominantPlatform,
+    overallSentiment: totalPosts > 0 ? (todayPosts.filter((p: any) => (p.text || '').toLowerCase().includes('boikot')).length > todayPosts.length / 3 ? 'Negative' : 'Mixed') : 'N/A'
+  });
+});
+
+// Serve static build (only if it exists — allows dev mode without building)
+const BUILD_DIR = path.join(process.cwd(), 'frontend', 'build');
+const hasBuild = existsSync(BUILD_DIR);
+if (hasBuild) {
+  app.use(express.static(BUILD_DIR));
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(BUILD_DIR, 'index.html'));
+  });
+  console.log(`Serving static files from ${BUILD_DIR}`);
+} else {
+  console.warn(`No frontend build found at ${BUILD_DIR} — API only`);
+  app.get("*", (_req, res) => {
+    res.status(200).json({ message: "Buzztrack API is running. Build the frontend with 'npm run build' for the full UI." });
+  });
+}
+
+const PORT = process.env.PORT || 3000;
+const API_PORT = process.env.API_PORT || 3001;
+
+// ----- Global error handler -----
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
+server.listen(API_PORT, () => {
+  console.log(`API server running on port ${API_PORT}`);
+});

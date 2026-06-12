@@ -1,0 +1,1 @@
+import { UserReport } from '../domain/entities';export class SubmitReportUseCase {  async execute(report: Omit<UserReport, 'id' | 'timestamp' | 'status'>): Promise<UserReport> {    const newReport: UserReport = {      ...report,      id: `rep-${Date.now()}`,      timestamp: new Date().toISOString().substring(0, 16),      status: 'Pending Review',    };    return newReport;  }}

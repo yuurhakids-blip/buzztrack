@@ -1,7 +1,3 @@
-/**
- * Types for the Buzzer Tracker application
- */
-
 export type Platform = 'X' | 'TikTok' | 'YouTube' | 'All';
 
 export interface Campaign {
@@ -19,6 +15,9 @@ export interface Campaign {
   hashtags: string[];
   keyNarrative: string;
   buzzerCount: number;
+  predictedRiskTrend?: 'rising' | 'stable' | 'falling'; // New: Predictive
+  aiInsight?: string; // New: Deep insight
+  riskTrendMode?: 'AI' | 'Heuristic'; // New: Mode indicator for prediction
 }
 
 export interface SuspiciousAccount {
@@ -33,12 +32,14 @@ export interface SuspiciousAccount {
   lastActive: string;
   reason: string;
   recentCopypastaCount: number;
+  aiEvidenceSummary?: string; // New: AI generated evidence
+  clusterId?: string; // New: Botnet cluster group
 }
 
 export interface NetworkNode {
   id: string;
   label: string;
-  group: 'campaign' | 'buzzer_master' | 'buzzer_node' | 'hashtag' | 'platform_hub' | 'suspicious';
+  group: 'campaign' | 'buzzer_master' | 'buzzer_node' | 'hashtag' | 'platform_hub';
   platform?: Platform;
   size: number;
   botScore?: number;
@@ -85,7 +86,6 @@ export interface UserReport {
   status: 'Pending Review' | 'Processed' | 'Dismissed';
 }
 
-// Social Media OAuth and Analytics Types
 export interface SocialAccount {
   id: string;
   username: string;
@@ -130,3 +130,46 @@ export interface AudienceDemographics {
   regionBreakdown: DemographicSegment[];
 }
 
+export interface NetworkAnalysisResult {
+  coordinationDetected: boolean;
+  coordinationScore: number;
+  patterns: string[];
+  summary: string;
+  fallback?: boolean;
+}
+
+export interface CampaignSummaryResult {
+  summary: string;
+  keyInsights: string[];
+  riskLevel: 'low' | 'medium' | 'high';
+  fallback?: boolean;
+}
+
+export interface ReportClassificationResult {
+  isValid: boolean;
+  category: string;
+  confidence: number;
+  explanation: string;
+  fallback?: boolean;
+}
+
+export interface PostSentimentResult {
+  sentiment: 'positive' | 'negative' | 'neutral';
+  sentimentScore: number;
+  explanation: string;
+  fallback?: boolean;
+}
+
+export interface ThresholdRecommendation {
+  suggestedBotScoreThreshold: number;
+  suggestedCopypastaThreshold: number;
+  reasoning: string;
+  fallback?: boolean;
+}
+
+export interface ContentLabelResult {
+  labels: string[];
+  primaryCategory: string;
+  explanation: string;
+  fallback?: boolean;
+}

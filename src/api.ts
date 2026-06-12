@@ -26,7 +26,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...(options.headers as Record<string, string>),
   };
 
-  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  } catch (err: any) {
+    throw new ApiError(
+      err.message === 'Failed to fetch'
+        ? 'Gagal terhubung ke server API. Pastikan backend berjalan (npm run dev).'
+        : err.message || 'Network error',
+      0
+    );
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -38,15 +48,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json();
 }
 
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+  };
+}
+
 export const api = {
   // Campaigns
   campaigns: {
-    list: () => request<Campaign[]>('/api/campaigns'),
+    list: (page = 1, limit = 20) => request<PaginatedResponse<Campaign>>(`/api/campaigns?page=${page}&limit=${limit}`),
   },
 
   // Suspicious Accounts
   accounts: {
-    list: () => request<SuspiciousAccount[]>('/api/accounts'),
+    list: (page = 1, limit = 20) => request<PaginatedResponse<SuspiciousAccount>>(`/api/accounts?page=${page}&limit=${limit}`),
   },
 
   // Stats
@@ -120,7 +139,7 @@ export const api = {
         body: JSON.stringify({ id }),
       }),
     search: (keyword: string) =>
-      request<{ success: boolean; method: string }>('/api/social/search', {
+      request<{ success: boolean; method: string; keyword?: string; campaigns?: any[]; accounts?: any[] }>('/api/social/search', {
         method: 'POST',
         body: JSON.stringify({ keyword }),
       }),
@@ -133,7 +152,7 @@ export const api = {
 
   // Scrapers Status
   scrapers: {
-    status: () => request<{ twitter: boolean; youtube: boolean; tiktok: boolean }>('/api/scrapers/status'),
+    status: () => request<{ twitter: boolean; youtube: boolean; tiktok: boolean; postCounts?: { twitter: number; youtube: number; tiktok: number }; totalPosts?: number; totalAccounts?: number; lastSync?: string }>('/api/scrapers/status'),
   },
 
   // Reports list
