@@ -2,10 +2,11 @@ import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { Campaign, SuspiciousAccount, Platform, AnalysisResponse, NetworkNode, NetworkLink, SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from './core/domain/entities';
 import { api } from './api';
 import { AIService } from './infrastructure/services/AIService';
-import { Settings as SettingsIcon, ShieldAlert, Search, Radio, Hash, UserX, BrainCircuit, AlertTriangle, PlusCircle, ExternalLink, Send, Users, LineChart, CornerDownRight, TrendingUp, CalendarDays, X as CloseIcon, CheckCircle, Clock, Fingerprint, Cpu, RefreshCw } from 'lucide-react';
+import { Settings as SettingsIcon, ShieldAlert, Search, Radio, Hash, UserX, BrainCircuit, AlertTriangle, PlusCircle, ExternalLink, Send, Users, LineChart, CornerDownRight, TrendingUp, CalendarDays, X as CloseIcon, CheckCircle, Clock, Fingerprint, Cpu, RefreshCw, Activity } from 'lucide-react';
 const NetworkGraph = lazy(() => import('./components/NetworkGraph'));
 const SocialAnalyticsDashboard = lazy(() => import('./components/SocialAnalyticsDashboard'));
 const Settings = lazy(() => import('./settings/Settings'));
+const SentimentAnalysis = lazy(() => import('./components/SentimentAnalysis'));
 import DatePickerModal from './components/DatePickerModal';
 import events from 'events';
 events.defaultMaxListeners = 100;
@@ -13,7 +14,7 @@ events.defaultMaxListeners = 100;
 const TrendDashboard = lazy(() => import('./components/TrendDashboard'));
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'campaigns' | 'accounts' | 'graph' | 'analyzer' | 'reporter' | 'analytics' | 'settings' | 'tren'>('campaigns');
+  const [activeTab, setActiveTab] = useState<'campaigns' | 'accounts' | 'graph' | 'analyzer' | 'reporter' | 'analytics' | 'settings' | 'tren' | 'sentiment'>('campaigns');
   const [trendData, setTrendData] = useState<any>(null);
   const [trendInsight, setTrendInsight] = useState<{ insight: string, mode: 'AI' | 'Heuristic' | null }>({ insight: '', mode: null });
   const [isTrendLoading, setIsTrendLoading] = useState(false);
@@ -596,96 +597,67 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
       )}
 
       {/* Header (Top Navigation & Clearances) */}
-      <header className="h-20 bg-[#0A0A0B] border-b border-[#2A2A2E] px-6 lg:px-12 flex items-center justify-between z-10 sticky top-0" id="global-header">
-        <div className="flex items-center space-x-4">
+      <header className="bg-[#0A0A0B] border-b border-[#2A2A2E] px-4 sm:px-6 lg:px-12 py-3 sm:py-4 flex items-center justify-between z-10 sticky top-0" id="global-header">
+        <div className="flex items-center gap-3 sm:gap-4">
           {/* EchoWatch Styled Golden Hex Logo */}
-          <div className="w-10 h-10 bg-gradient-to-br from-[#D4AF37] to-[#8A6D3B] rounded flex items-center justify-center text-black font-extrabold text-xl shadow-lg shadow-[#D4AF37]/10 select-none">
+          <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-[#D4AF37] to-[#8A6D3B] rounded-lg flex items-center justify-center text-black font-extrabold text-lg sm:text-xl shadow-lg shadow-[#D4AF37]/10 select-none">
             Σ
           </div>
-          <div>
+          <div className="hidden sm:block">
             <div className="flex items-center gap-2">
-              <h1 className="text-xl md:text-2xl font-serif italic tracking-tight text-[#F5F5F5] font-semibold">EchoWatch</h1>
-              <span className="text-[9px] font-mono border border-amber-500/30 text-[#D4AF37] font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest bg-amber-500/5">
-                v2.6
+              <h1 className="text-lg sm:text-xl md:text-2xl font-serif italic tracking-tight text-[#F5F5F5] font-semibold">EchoWatch</h1>
+              <span className="text-[8px] sm:text-[9px] font-mono border border-amber-500/30 text-[#D4AF37] font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest bg-amber-500/5">
+                v2.7
               </span>
-              <span className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest flex items-center gap-1 ${aiActive ? 'border border-emerald-500/30 text-emerald-400 bg-emerald-500/5' : 'border border-slate-700 text-slate-500 bg-slate-800/30'}`}>
+              <span className={`text-[8px] sm:text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded uppercase tracking-widest flex items-center gap-1 ${aiActive ? 'border border-emerald-500/30 text-emerald-400 bg-emerald-500/5' : 'border border-slate-700 text-slate-500 bg-slate-800/30'}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${aiActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-                {aiActive ? `AI ${activeProvider} (${activeModel}) Aktif` : 'AI Offline'}
+                {aiActive ? `AI ${activeProvider}` : 'AI Offline'}
               </span>
             </div>
-            <p className="text-[10px] text-[#A0A0A5] font-mono tracking-wider uppercase">Pemindai Disinformasi Multi-Platform</p>
+            <p className="text-[9px] sm:text-[10px] text-[#A0A0A5] font-mono tracking-wider uppercase">Pemindai Disinformasi</p>
           </div>
         </div>
 
         {/* Desktop Custom Nav Link Tabs */}
-        <nav className="hidden lg:flex items-center space-x-8 text-xs uppercase tracking-[0.18em] font-semibold text-[#A0A0A5]">
-          <button 
-            onClick={() => setActiveTab('campaigns')}
-            className={`pb-1 transition-all ${activeTab === 'campaigns' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-campaigns"
-          >
-            Intel Kampanye
-          </button>
-          <button 
-            onClick={() => setActiveTab('accounts')}
-            className={`pb-1 transition-all ${activeTab === 'accounts' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-accounts"
-          >
-            Profil Entitas
-          </button>
-          <button 
-            onClick={() => setActiveTab('graph')}
-            className={`pb-1 transition-all ${activeTab === 'graph' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-graph"
-          >
-            Matriks Jaringan
-          </button>
-          <button 
-            onClick={() => setActiveTab('analytics')}
-            className={`pb-1 transition-all ${activeTab === 'analytics' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-analytics"
-          >
-            Analitik Sosial
-          </button>
-          <button 
-            onClick={() => setActiveTab('tren')}
-            className={`pb-1 transition-all ${activeTab === 'tren' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-trend"
-          >
-            Tren Harian
-          </button>
-          <button 
-            onClick={() => setActiveTab('analyzer')}
-            className={`pb-1 transition-all ${activeTab === 'analyzer' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-analyzer"
-          >
-            Analis Ancaman
-          </button>
-          <button 
-            onClick={() => setActiveTab('reporter')}
-            className={`pb-1 transition-all ${activeTab === 'reporter' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-reporter"
-          >
-            Lapor Insiden
-          </button>
-          <button 
-            onClick={() => setActiveTab('settings')}
-            className={`pb-1 transition-all ${activeTab === 'settings' ? 'text-[#D4AF37] border-b-2 border-[#D4AF37]' : 'hover:text-[#F5F5F5]'}`}
-            id="nav-settings"
-          >
-            Pengaturan
-          </button>
+        <nav className="hidden lg:flex items-center gap-2 md:gap-4 text-xs uppercase tracking-[0.18em] font-semibold text-[#A0A0A5]">
+          {[ 
+            { id: 'campaigns', label: 'Intel Kampanye', icon: Radio },
+            { id: 'accounts', label: 'Profil Entitas', icon: UserX },
+            { id: 'graph', label: 'Matriks Jaringan', icon: ShieldAlert },
+            { id: 'analytics', label: 'Analitik Sosial', icon: LineChart },
+            { id: 'tren', label: 'Tren Harian', icon: TrendingUp },
+            { id: 'sentiment', label: 'Sentimen', icon: Activity },
+            { id: 'analyzer', label: 'Analis Ancaman', icon: BrainCircuit },
+            { id: 'reporter', label: 'Lapor Insiden', icon: Send },
+            { id: 'settings', label: 'Pengaturan', icon: SettingsIcon }
+          ].map(tab => {
+            const Icon = tab.icon;
+            return (
+              <button 
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-lg transition-all ${activeTab === tab.id ? 'text-[#D4AF37] bg-[#D4AF37]/10 border border-[#D4AF37]/30' : 'text-[#A0A0A5] hover:text-[#F5F5F5] hover:bg-slate-800/30'}`}
+                id={`nav-${tab.id}`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span className="hidden xl:block">{tab.label}</span>
+              </button>
+            )
+          })}
         </nav>
 
         {/* Security level badge & user */}
-        <div className="flex items-center space-x-4">
-          <div className="hidden sm:block text-right">
-            <p className="text-[9px] font-mono text-[#66666E] uppercase tracking-wider">Mode Akses Integritas</p>
-            <p className="text-xs font-bold text-[#D4AF37] opacity-90 font-mono">Level 4: Admin Keamanan</p>
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="hidden md:block text-right">
+            <p className="text-[9px] font-mono text-[#66666E] uppercase tracking-wider">Mode Akses</p>
+            <p className="text-xs font-bold text-[#D4AF37] opacity-90 font-mono">Admin Keamanan</p>
           </div>
-          <div className="w-10 h-10 rounded-full border border-violet-500/20 bg-[#15151A] p-0.5 flex items-center justify-center text-xs font-mono font-bold text-amber-400 bg-gradient-to-tr from-[#1A1A1F] to-[#272730] shadow-inner border border-[#D4AF37]/30">
+          <button 
+            onClick={() => setActiveTab('settings')}
+            className="w-9 h-9 rounded-full border border-slate-700 bg-[#15151A] flex items-center justify-center text-sm font-mono font-bold text-amber-400 hover:border-[#D4AF37]/50 transition"
+          >
             H.I
-          </div>
+          </button>
         </div>
       </header>
 
@@ -869,27 +841,32 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         {/* Dynamic Nav Tabs for Mobile Views */}
         <div className="lg:hidden flex bg-[#0F0F12] border-b border-[#2A2A2E] overflow-x-auto whitespace-nowrap p-2 scrollbar-none" id="mobile-nav-tabs">
           {[
-            { id: 'campaigns', label: 'Kampanye' },
-            { id: 'accounts', label: 'Akun Mencurigakan' },
-            { id: 'graph', label: 'Grafik Korelasi' },
-            { id: 'analytics', label: 'Analitik Sosial' },
-            { id: 'tren', label: 'Tren Harian' },
-            { id: 'analyzer', label: 'Pindai Ancaman' },
-            { id: 'reporter', label: 'Lapor Insiden' },
-            { id: 'settings', label: 'Pengaturan' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`px-4 py-2 mx-1 text-xs font-semibold rounded-md transition duration-200 ${
-                activeTab === tab.id
-                  ? 'bg-[#1A1A1F] text-[#D4AF37] border border-[#D4AF37]/50'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+            { id: 'campaigns', label: 'Kampanye', icon: Radio },
+            { id: 'accounts', label: 'Akun', icon: UserX },
+            { id: 'graph', label: 'Grafik', icon: ShieldAlert },
+            { id: 'analytics', label: 'Analitik', icon: LineChart },
+            { id: 'tren', label: 'Tren', icon: TrendingUp },
+            { id: 'sentiment', label: 'Sentimen', icon: Activity },
+            { id: 'analyzer', label: 'Analis', icon: BrainCircuit },
+            { id: 'reporter', label: 'Lapor', icon: Send },
+            { id: 'settings', label: 'Setelan', icon: SettingsIcon },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`flex flex-col items-center gap-1 px-3 py-2 mx-1 text-[10px] font-semibold rounded-lg transition duration-200 ${
+                  activeTab === tab.id
+                    ? 'bg-[#1A1A1F] text-[#D4AF37] border border-[#D4AF37]/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
         {/* Primary Content View Container */}
@@ -1539,7 +1516,21 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
             />
           )}
 
-          {/* TAB 4: Gemini-powered Analyzer Playground */}
+          {/* TAB 4: Sentiment Analysis */}
+          {activeTab === 'sentiment' && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500 font-mono text-sm border border-slate-800 rounded-xl p-8">Memuat Analisis Sentimen...</div>}>
+              <SentimentAnalysis 
+                showNotification={showNotification}
+                aiConfig={{
+                  provider: (localStorage.getItem('selectedProvider') as any) || 'Gemini',
+                  model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
+                  apiKey: localStorage.getItem(`api-key-${localStorage.getItem('selectedProvider') || 'Gemini'}`) || ''
+                }}
+              />
+            </Suspense>
+          )}
+
+          {/* TAB 5: Gemini-powered Analyzer Playground */}
           {activeTab === 'analyzer' && (
             <div className="space-y-6 animate-fade-in" id="view-analyzer">
               <div>

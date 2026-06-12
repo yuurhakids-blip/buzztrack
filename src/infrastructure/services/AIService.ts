@@ -259,4 +259,78 @@ export class AIService {
       return { trend: 'stable', insight: '[MODE HEURISTIK] Prediksi AI tidak tersedia.', mode: 'Heuristic' };
     }
   }
+
+  static async analyzeSentiment(topic: string, posts: any[], config: AIConfig): Promise<{ 
+    sentiment: 'Positif' | 'Negatif' | 'Netral',
+    score: number,
+    summary: string,
+    keywords: string[],
+    mode: 'AI' | 'Heuristic'
+  }> {
+    const contentPreview = topic + '|' + posts.slice(0, 5).map(p => (p.text || '').substring(0, 50)).join('|');
+    const cacheKey = AICache.generateKey('sentiment', `${contentPreview}_${config.model}`);
+    const cached = AICache.get<{ sentiment: 'Positif' | 'Negatif' | 'Netral', score: number, summary: string, keywords: string[], mode: 'AI' | 'Heuristic' }>(cacheKey);
+    if (cached) return cached;
+
+    const { provider, model, apiKey } = config;
+
+    const generateHeuristicSentiment = () => {
+      const positiveWords = ['bagus', 'hebat', 'sukses', 'menyenangkan', 'terbaik', 'luar biasa', 'cinta', 'bangga', 'positif'];
+      const negativeWords = ['buruk', 'jelek', 'gagal', 'menyedihkan', 'terburuk', 'mengecewakan', 'benci', 'kecewa', 'negatif', 'penipuan', 'hoax'];
+      let positiveCount = 0;
+      let negativeCount = 0;
+      const allText = (topic + ' ' + posts.map(p => p.text || '').join(' ')).toLowerCase();
+
+      positiveWords.forEach(word => {
+        const regex = new RegExp(word, 'g');
+        positiveCount += (allText.match(regex) || []).length;
+      });
+      negativeWords.forEach(word => {
+        const regex = new RegExp(word, 'g');
+        negativeCount += (allText.match(regex) || []).length;
+      });
+
+      const total = positiveCount + negativeCount;
+      let sentiment: 'Positif' | 'Negatif' | 'Netral' = 'Netral';
+      let score = 50;
+
+      if (total > 0) {
+        if (positiveCount > negativeCount) {
+          sentiment = 'Positif';
+          score = Math.round(50 + (positiveCount / total) * 50);
+        } else if (negativeCount > positiveCount) {
+          sentiment = 'Negatif';
+          score = Math.round(50 - (negativeCount / total) * 50);
+        }
+      }
+
+      const keywords = [topic.split(' ')[0], 'trending', 'topik'];
+      const summary = `[MODE HEURISTIK] Analisis sentimen untuk topik "${topic}" menunjukkan sentimen ${sentiment.toLowerCase()} berdasarkan ${posts.length} postingan yang dipantau.`;
+
+      return { sentiment, score, summary, keywords, mode: 'Heuristic' as const };
+    };
+
+    if (!apiKey) {
+      const result = generateHeuristicSentiment();
+      AICache.set(cacheKey, result);
+      return result;
+    }
+
+    const prompt = `Analisis sentimen secara umum untuk topik: "${topic}". 
+    Gunakan ${posts.length} postingan berikut sebagai acuan: ${JSON.stringify(posts.slice(0, 20))}.
+    Berikan jawaban dalam format JSON (Bahasa Indonesia) dengan struktur: { "sentiment": "Positif" | "Negatif" | "Netral", "score": 0-100 (50 netral), "summary": "ringkasan singkat (2-3 kalimat)", "keywords": ["kata kunci penting"] }`;
+
+    try {
+      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
+      const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '');
+      const parsed = JSON.parse(cleanJson);
+      const result = { ...parsed, mode: 'AI' as const };
+      AICache.set(cacheKey, result);
+      return result;
+    } catch {
+      const result = generateHeuristicSentiment();
+      AICache.set(cacheKey, result);
+      return result;
+    }
+  }
 }
