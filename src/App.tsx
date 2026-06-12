@@ -619,14 +619,14 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         </div>
 
         {/* Desktop Custom Nav Link Tabs */}
-        <nav className="hidden lg:flex items-center gap-2 md:gap-4 text-xs uppercase tracking-[0.18em] font-semibold text-[#A0A0A5]">
+        <nav className="hidden lg:flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A0A0A5]">
           {[ 
             { id: 'campaigns', label: 'Intel Kampanye', icon: Radio },
             { id: 'accounts', label: 'Profil Entitas', icon: UserX },
             { id: 'graph', label: 'Matriks Jaringan', icon: ShieldAlert },
             { id: 'analytics', label: 'Analitik Sosial', icon: LineChart },
             { id: 'tren', label: 'Tren Harian', icon: TrendingUp },
-            { id: 'sentiment', label: 'Sentimen', icon: Activity },
+            { id: 'sentiment', label: 'Analisis Sentimen', icon: Activity },
             { id: 'analyzer', label: 'Analis Ancaman', icon: BrainCircuit },
             { id: 'reporter', label: 'Lapor Insiden', icon: Send },
             { id: 'settings', label: 'Pengaturan', icon: SettingsIcon }
@@ -636,11 +636,11 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               <button 
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-lg transition-all ${activeTab === tab.id ? 'text-[#D4AF37] bg-[#D4AF37]/10 border border-[#D4AF37]/30' : 'text-[#A0A0A5] hover:text-[#F5F5F5] hover:bg-slate-800/30'}`}
+                className={`flex items-center gap-1 px-2 py-2 rounded-xl transition-all duration-200 ${activeTab === tab.id ? 'text-[#D4AF37] bg-[#D4AF37]/10 border border-[#D4AF37]/30 shadow-md' : 'text-[#A0A0A5] hover:text-[#F5F5F5] hover:bg-slate-800/30'}`}
                 id={`nav-${tab.id}`}
               >
-                <Icon className="w-3.5 h-3.5" />
-                <span className="hidden xl:block">{tab.label}</span>
+                <Icon className="w-4 h-4" />
+                <span>{tab.label}</span>
               </button>
             )
           })}
