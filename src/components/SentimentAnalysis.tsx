@@ -103,6 +103,28 @@ export default function SentimentAnalysis({
   const [sentimentData, setSentimentData] = useState<SentimentData | null>(null);
   const [posts, setPosts] = useState<PostData[]>([]);
   const [selectedPlatform, setSelectedPlatform] = useState<string>('All');
+  const restoreKey = 'buzztrack_sentiment_state';
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(restoreKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.topic) setTopic(parsed.topic);
+        if (parsed.posts?.length) setPosts(parsed.posts);
+        if (parsed.sentimentData) setSentimentData(parsed.sentimentData);
+      }
+    } catch { /* ignore corrupt data */ }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const existing = localStorage.getItem(restoreKey);
+      const parsed = existing ? JSON.parse(existing) : {};
+      parsed.topic = topic;
+      localStorage.setItem(restoreKey, JSON.stringify(parsed));
+    } catch { /* ignore */ }
+  }, [topic]);
 
   const handleAnalyze = async () => {
     if (!topic.trim()) {
@@ -212,7 +234,12 @@ export default function SentimentAnalysis({
         .filter((v, i, a) => a.indexOf(v) === i)
         .slice(0, 5);
       const summary = `[MODE ${batchResult.mode}] Dari ${total} postingan yang dianalisis, sentimen ${dominantSentiment.toLowerCase()} mendominasi (${dominantScore}% dari total). ${positif} positif, ${negatif} negatif, ${netral} netral.`;
-      setSentimentData({ sentiment: dominantSentiment, score: dominantScore, summary, keywords, mode: batchResult.mode });
+      const newSentimentData = { sentiment: dominantSentiment, score: dominantScore, summary, keywords, mode: batchResult.mode };
+      setPosts(scrapedPosts);
+      setSentimentData(newSentimentData);
+      try {
+        localStorage.setItem(restoreKey, JSON.stringify({ topic, posts: scrapedPosts, sentimentData: newSentimentData }));
+      } catch { /* storage full */ }
 
       showNotification('success', `Analisis sentimen selesai! ${scrapedPosts.length} postingan dianalisis.`);
     } catch (err) {
@@ -533,14 +560,25 @@ export default function SentimentAnalysis({
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
                 <MessageSquare className="w-4 h-4 text-[#D4AF37]" />
-                Postingan Terkait ({filteredPosts.length})
+                Postingan Terkait ({posts.length})
               </h3>
               <div className="text-[10px] font-mono text-slate-500">
-                Menampilkan {Math.min(20, filteredPosts.length)} postingan teratas
+                Menampilkan semua {posts.length} postingan
               </div>
             </div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {['X', 'YouTube', 'TikTok'].map(p => {
+                const count = posts.filter(pt => pt.platform === p).length;
+                if (count === 0) return null;
+                return (
+                  <span key={p} className="text-[10px] font-mono bg-slate-900 text-slate-300 px-2.5 py-1 rounded-full border border-slate-800">
+                    ● {p} ({count})
+                  </span>
+                );
+              })}
+            </div>
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-              {filteredPosts.slice(0, 20).map((post) => (
+              {posts.map((post) => (
                 <div
                   key={post.id}
                   className="p-4 bg-[#0F0F12] border border-[#2A2A2E] rounded-xl hover:border-slate-700 transition"

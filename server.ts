@@ -72,7 +72,7 @@ app.get("/api/stats", async (req, res) => {
   const campaigns = scrapedCampaigns.length > 0 ? scrapedCampaigns : await campaignRepo.getAll();
   const accounts = scrapedAccounts.length > 0 ? scrapedAccounts : await accountRepo.getAll();
   const totalReach = campaigns.reduce((acc: number, c: any) => acc + c.reach, 0);
-  const activeBuzzerCount = campaigns.reduce((acc: number, c: any) => acc + c.buzzerCount, 0) + accounts.length;
+  const activeBuzzerCount = accounts.length;
   const avgBotScore = Math.round(
     accounts.reduce((acc: number, a: any) => acc + a.botScore, 0) / (accounts.length || 1)
   );
@@ -533,52 +533,78 @@ async function generateKeywordData(keyword: string) {
   const intensity = ['Low', 'Medium', 'High', 'Critical'];
   const sentiments = ['Positive', 'Negative', 'Neutral', 'Mixed'];
   const statuses = ['Active', 'Active', 'Monitoring'];
-  const stats = ['Flagged', 'Under Investigation', 'Verified Buzzer', 'Suspended'];
+  const accStatuses = ['Flagged', 'Under Investigation', 'Verified Buzzer', 'Suspended'];
 
-  scrapedCampaigns = Array.from({ length: 3 }, (_, i) => ({
-    id: `camp-${id}-${i}`,
-    title: `${keyword} Campaign ${i + 1}`,
-    description: `Organized disinformation campaign around "${keyword}" detected across social platforms.`,
-    topic: keyword,
-    platforms: [platforms[i % 3]],
-    intensity: intensity[i % 4],
-    sentiment: sentiments[i % 4],
-    startDate: new Date().toISOString().slice(0, 10),
-    status: statuses[i % 3],
-    botRatio: 0.5 + Math.random() * 0.45,
-    reach: Math.floor(50000 + Math.random() * 200000),
-    hashtags: [`#${keyword}`, `#${keyword}Now`, `#Dukung${keyword}`],
-    keyNarrative: `Coordinated amplification of "${keyword}" narrative using copypasta and hashtag spamming.`,
-    buzzerCount: Math.floor(10 + Math.random() * 90),
-  }));
+  const intensityConfig = [
+    { accounts: 5, posts: 8, reach: 50000 },
+    { accounts: 15, posts: 20, reach: 150000 },
+    { accounts: 35, posts: 45, reach: 400000 },
+    { accounts: 60, posts: 80, reach: 800000 },
+  ];
 
-  scrapedAccounts = Array.from({ length: 5 }, (_, i) => ({
-    id: `acc-${id}-${i}`,
-    username: `buzzer_${keyword}_${i}`,
-    displayName: `Buzzer ${keyword} #${i}`,
-    platform: platforms[i % 3],
-    followers: Math.floor(100 + Math.random() * 5000),
-    following: Math.floor(500 + Math.random() * 3000),
-    botScore: Math.floor(60 + Math.random() * 40),
-    status: stats[i % 4],
-    lastActive: new Date().toISOString(),
-    reason: `Suspected coordination in "${keyword}" disinformation network.`,
-    recentCopypastaCount: Math.floor(3 + Math.random() * 20),
-  }));
+  scrapedCampaigns = Array.from({ length: 3 }, (_, i) => {
+    const cfg = intensityConfig[i % 4];
+    return {
+      id: `camp-${id}-${i}`,
+      title: `${keyword} Campaign ${i + 1}`,
+      description: `Organized disinformation campaign around "${keyword}" detected across social platforms.`,
+      topic: keyword,
+      platforms: [platforms[i % 3]],
+      intensity: intensity[i % 4],
+      sentiment: sentiments[i % 4],
+      startDate: new Date().toISOString().slice(0, 10),
+      status: statuses[i % 3],
+      botRatio: 0.5 + Math.random() * 0.45,
+      reach: cfg.reach,
+      hashtags: [`#${keyword}`, `#${keyword}Now`, `#Dukung${keyword}`],
+      keyNarrative: `Coordinated amplification of "${keyword}" narrative using copypasta and hashtag spamming.`,
+      buzzerCount: cfg.accounts,
+    };
+  });
 
-  scrapedPosts = Array.from({ length: 8 }, (_, i) => ({
-    id: `post-${id}-${i}`,
-    platform: platforms[i % 3],
-    authorUsername: `user_${keyword}_${i}`,
-    text: `${keyword} is a trending topic! #${keyword} #viral ${i % 2 === 0 ? 'Dukung terus!' : 'Tolak!'}`,
-    postUrl: `https://${platforms[i % 3].toLowerCase()}.com/post/${id}-${i}`,
-    publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
-    likes: Math.floor(50 + Math.random() * 500),
-    comments: Math.floor(10 + Math.random() * 100),
-    shares: Math.floor(5 + Math.random() * 200),
-    reach: Math.floor(1000 + Math.random() * 10000),
-    engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
-  }));
+  let accIdCounter = 0;
+  scrapedAccounts = scrapedCampaigns.flatMap((camp, ci) => {
+    const cfg = intensityConfig[ci % 4];
+    return Array.from({ length: cfg.accounts }, (_, i) => {
+      const idx = accIdCounter++;
+      return {
+        id: `acc-${id}-${idx}`,
+        username: `buzzer_${keyword}_${idx}`,
+        displayName: `Buzzer ${keyword} #${idx}`,
+        platform: platforms[idx % 3],
+        followers: Math.floor(100 + Math.random() * 5000),
+        following: Math.floor(500 + Math.random() * 3000),
+        botScore: Math.floor(60 + Math.random() * 40),
+        status: accStatuses[idx % 4],
+        lastActive: new Date().toISOString(),
+        reason: `Suspected coordination in "${camp.title}" disinformation network.`,
+        recentCopypastaCount: Math.floor(3 + Math.random() * 20),
+        campaignId: camp.id,
+      };
+    });
+  });
+
+  let postIdCounter = 0;
+  scrapedPosts = scrapedCampaigns.flatMap((camp, ci) => {
+    const cfg = intensityConfig[ci % 4];
+    return Array.from({ length: cfg.posts }, (_, i) => {
+      const idx = postIdCounter++;
+      return {
+        id: `post-${id}-${idx}`,
+        platform: platforms[idx % 3],
+        authorUsername: `user_${keyword}_${idx}`,
+        text: `${keyword} is a trending topic! #${keyword} #viral ${idx % 2 === 0 ? 'Dukung terus!' : 'Tolak!'}`,
+        postUrl: `https://${platforms[idx % 3].toLowerCase()}.com/post/${id}-${idx}`,
+        publishedAt: new Date(Date.now() - idx * 3600000).toISOString(),
+        likes: Math.floor(50 + Math.random() * 500),
+        comments: Math.floor(10 + Math.random() * 100),
+        shares: Math.floor(5 + Math.random() * 200),
+        reach: Math.floor(1000 + Math.random() * 10000),
+        engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+        campaignId: camp.id,
+      };
+    });
+  });
 
   scrapedTimeline = Array.from({ length: 14 }, (_, i) => {
     const d = new Date();
@@ -965,8 +991,8 @@ app.get("/api/network", (_req, res) => {
       const tagId = `tag-${tag.replace(/^#/, '').toLowerCase()}`;
       links.push({ source: c.id, target: tagId, value: 70 });
     });
-    // Campaign → Suspicious
-    scrapedAccounts.forEach(a => {
+    // Campaign → Suspicious (only accounts linked to this campaign)
+    scrapedAccounts.filter(a => a.campaignId === c.id).forEach(a => {
       links.push({ source: c.id, target: a.id, value: Math.floor(30 + Math.random() * 70) });
     });
   });
