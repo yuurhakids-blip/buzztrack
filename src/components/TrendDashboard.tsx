@@ -29,7 +29,7 @@ export default function TrendDashboard({ trendData, insight, insightMode, isTren
     );
   }
 
-  const { platforms, totalPosts, dominantPlatform, overallSentiment, date } = trendData;
+  const { platforms, totalPosts, dominantPlatform, overallSentiment, date, location } = trendData;
   const platformList = Object.entries(platforms || {}).map(([key, val]: any) => ({ name: key, ...val }));
   const chartData = platformList.map((p: any) => ({ name: p.name, posts: p.postCount, engagement: p.totalEngagement }));
 
@@ -41,9 +41,12 @@ export default function TrendDashboard({ trendData, insight, insightMode, isTren
           <h2 className="text-xl lg:text-2xl font-serif text-[#F5F5F5] font-semibold flex items-center gap-2">
             <TrendingUp className="w-5 h-5 text-amber-500" />
             Tren Harian — {date || 'Hari Ini'}
+            <span className="ml-1 text-[11px] font-mono bg-red-600/20 text-red-400 border border-red-600/30 px-2.5 py-1 rounded-full font-bold flex items-center gap-1">
+              🇮🇩 Indonesia
+            </span>
           </h2>
           <p className="text-xs text-slate-400 mt-1">
-            Total {totalPosts || 0} postingan terpantau · Dominasi: {dominantPlatform} · Sentimen: {overallSentiment}
+            Total {totalPosts || 0} postingan terpantau di Indonesia · Dominasi: {dominantPlatform} · Sentimen: {overallSentiment}
           </p>
         </div>
       </div>

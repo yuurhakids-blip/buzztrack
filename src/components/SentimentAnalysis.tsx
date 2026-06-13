@@ -93,16 +93,21 @@ function analyzePostSentiment(text: string): { sentiment: 'Positif' | 'Negatif' 
 
 export default function SentimentAnalysis({
   showNotification,
-  aiConfig
+  aiConfig,
+  aiActive = false
 }: {
   showNotification: (type: 'success' | 'error', text: string) => void;
   aiConfig: { provider: string; model: string; apiKey: string };
+  aiActive?: boolean;
 }) {
   const [topic, setTopic] = useState('');
   const [loading, setLoading] = useState(false);
   const [sentimentData, setSentimentData] = useState<SentimentData | null>(null);
   const [posts, setPosts] = useState<PostData[]>([]);
   const [selectedPlatform, setSelectedPlatform] = useState<string>('All');
+  const [startDate, setStartDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [postPlatformFilter, setPostPlatformFilter] = useState<string>('All');
   const restoreKey = 'buzztrack_sentiment_state';
 
   useEffect(() => {
@@ -113,6 +118,8 @@ export default function SentimentAnalysis({
         if (parsed.topic) setTopic(parsed.topic);
         if (parsed.posts?.length) setPosts(parsed.posts);
         if (parsed.sentimentData) setSentimentData(parsed.sentimentData);
+        if (parsed.startDate) setStartDate(parsed.startDate);
+        if (parsed.endDate) setEndDate(parsed.endDate);
       }
     } catch { /* ignore corrupt data */ }
   }, []);
@@ -122,9 +129,11 @@ export default function SentimentAnalysis({
       const existing = localStorage.getItem(restoreKey);
       const parsed = existing ? JSON.parse(existing) : {};
       parsed.topic = topic;
+      parsed.startDate = startDate;
+      parsed.endDate = endDate;
       localStorage.setItem(restoreKey, JSON.stringify(parsed));
     } catch { /* ignore */ }
-  }, [topic]);
+  }, [topic, startDate, endDate]);
 
   const handleAnalyze = async () => {
     if (!topic.trim()) {
@@ -136,10 +145,7 @@ export default function SentimentAnalysis({
     try {
       let scrapedPosts: PostData[] = [];
 
-      try {
-        await api.social.search(topic.trim());
-      } catch { /* search may fail silently */ }
-
+      // Coba ambil data dari backend terlebih dahulu
       try {
         const postsData = await api.social.posts.list();
         scrapedPosts = postsData
@@ -162,12 +168,19 @@ export default function SentimentAnalysis({
               sentimentScore: score
             };
           });
-      } catch { /* fallback to empty */ }
+      } catch { /* fallback */ }
 
-      if (scrapedPosts.length === 0) {
-        try {
-          const postsData = await api.social.posts.list();
-          scrapedPosts = postsData.map(p => {
+      // Jika ingin memastikan data baru (scrap), panggil search eksplisit
+      try {
+        showNotification('success', 'Memulai pencarian data real-time via scraper...');
+        await api.social.search(topic);
+        
+        // Polling singkat untuk memastikan data scraper tersimpan di db
+        await new Promise(resolve => setTimeout(resolve, 2000)); 
+        const postsData = await api.social.posts.list();
+        scrapedPosts = postsData
+          .filter(p => p.text.toLowerCase().includes(topic.toLowerCase()))
+          .map(p => {
             const { sentiment, score } = analyzePostSentiment(p.text);
             return {
               id: p.id,
@@ -185,21 +198,56 @@ export default function SentimentAnalysis({
               sentimentScore: score
             };
           });
-        } catch { /* no data at all */ }
+      } catch (e) {
+        console.error('[Sentiment] Search/posts fetch failed:', e);
+        showNotification('error', 'Gagal mengambil data real-time, menggunakan data lokal.');
       }
 
-      if (scrapedPosts.length === 0) {
-        showNotification('error', 'Belum ada data postingan. Jalankan pencarian di tab Analitik Sosial terlebih dahulu.');
-        setLoading(false);
-        return;
+      // Filter berdasarkan rentang tanggal
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        const end = endDate ? new Date(endDate) : new Date(startDate);
+        end.setHours(23, 59, 59, 999);
+        scrapedPosts = scrapedPosts.filter(p => {
+          const postDate = new Date(p.date);
+          return postDate >= start && postDate <= end;
+        });
       }
 
+      showNotification('success', `${scrapedPosts.length} postingan ditemukan untuk "${topic}" (${startDate} — ${endDate || startDate})`);
       setPosts(scrapedPosts);
 
-      const batchResult = await AIService.analyzePostSentimentsBatch(
-        scrapedPosts.map(p => ({ id: p.id, text: p.text })),
-        aiConfig as any
-      );
+      let batchResult: {
+        postSentiments: { postId: string; sentiment: 'Positif' | 'Negatif' | 'Netral'; score: number }[];
+        mode: 'AI' | 'Heuristic';
+      };
+      try {
+        batchResult = await AIService.analyzePostSentimentsBatch(
+          scrapedPosts.map(p => ({ id: p.id, text: p.text })),
+          aiConfig as any
+        );
+      } catch (err: any) {
+        showNotification('error', `AI gagal: ${err?.message || 'Unknown error'}. Gunakan heuristic sebagai fallback.`);
+        // Fallback heuristic lokal
+        batchResult = {
+          postSentiments: scrapedPosts.map(p => {
+            const { sentiment, score } = analyzePostSentiment(p.text);
+            return { postId: p.id, sentiment, score };
+          }),
+          mode: 'Heuristic' as const
+        };
+      }
+
+      if (batchResult.mode === 'Heuristic' && aiConfig.apiKey) {
+        fetch('/api/ai/check-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: aiConfig.provider, key: aiConfig.apiKey, model: aiConfig.model })
+        }).then(r => r.json()).then(d => {
+          if (!d.valid) window.dispatchEvent(new CustomEvent('ai-status-changed'));
+        }).catch(() => {});
+      }
 
       if (batchResult.postSentiments.length > 0) {
         const sentimentMap = new Map(batchResult.postSentiments.map(s => [s.postId, s]));
@@ -233,12 +281,12 @@ export default function SentimentAnalysis({
         .flatMap(p => p.text.match(/#\w+/g) || [])
         .filter((v, i, a) => a.indexOf(v) === i)
         .slice(0, 5);
-      const summary = `[MODE ${batchResult.mode}] Dari ${total} postingan yang dianalisis, sentimen ${dominantSentiment.toLowerCase()} mendominasi (${dominantScore}% dari total). ${positif} positif, ${negatif} negatif, ${netral} netral.`;
+      const summary = `[MODE ${batchResult.mode}] Dari ${total} postingan (${startDate} — ${endDate || startDate}) yang dianalisis, sentimen ${dominantSentiment.toLowerCase()} mendominasi (${dominantScore}% dari total). ${positif} positif, ${negatif} negatif, ${netral} netral.`;
       const newSentimentData = { sentiment: dominantSentiment, score: dominantScore, summary, keywords, mode: batchResult.mode };
       setPosts(scrapedPosts);
       setSentimentData(newSentimentData);
       try {
-        localStorage.setItem(restoreKey, JSON.stringify({ topic, posts: scrapedPosts, sentimentData: newSentimentData }));
+        localStorage.setItem(restoreKey, JSON.stringify({ topic, startDate, endDate, posts: scrapedPosts, sentimentData: newSentimentData }));
       } catch { /* storage full */ }
 
       showNotification('success', `Analisis sentimen selesai! ${scrapedPosts.length} postingan dianalisis.`);
@@ -331,7 +379,7 @@ export default function SentimentAnalysis({
 
       {/* Input Section */}
       <div className="bg-[#15151A] border border-[#2A2A2E] rounded-2xl p-6">
-        <div className="flex flex-col md:flex-row gap-4 mb-4">
+        <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1">
             <label className="text-[10px] font-mono uppercase tracking-widest text-[#66666E] font-semibold block mb-2">
               Topik Analisis
@@ -348,16 +396,16 @@ export default function SentimentAnalysis({
               />
             </div>
           </div>
-          <div className="flex flex-col gap-2 md:w-64">
+          <div className="flex flex-col gap-2 md:w-40">
             <label className="text-[10px] font-mono uppercase tracking-widest text-[#66666E] font-semibold block mb-2">
-              Filter Platform
+              Platform
             </label>
             <select
               value={selectedPlatform}
               onChange={(e) => setSelectedPlatform(e.target.value)}
               className="w-full bg-[#0F0F12] border border-[#2A2A2E] rounded-xl px-4 py-4 text-sm text-slate-200 focus:outline-none focus:border-[#D4AF37]/50 transition"
             >
-              <option value="All">Semua Platform</option>
+              <option value="All">Semua</option>
               <option value="X">X</option>
               <option value="TikTok">TikTok</option>
               <option value="YouTube">YouTube</option>
@@ -370,8 +418,41 @@ export default function SentimentAnalysis({
               className="bg-gradient-to-r from-[#D4AF37] to-[#8A6D3B] text-black font-bold px-6 py-4 rounded-xl hover:brightness-110 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-              {loading ? 'Menganalisis...' : 'Analisis Sentimen'}
+              {loading ? 'Menganalisis...' : 'Analisis'}
             </button>
+          </div>
+        </div>
+
+        {/* Date Range Row */}
+        <div className="flex flex-col md:flex-row items-end gap-4 mt-4 pt-4 border-t border-slate-800">
+          <div className="flex flex-col gap-2">
+            <label className="text-[10px] font-mono uppercase tracking-widest text-[#66666E] font-semibold">
+              Tanggal Mulai
+            </label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="bg-[#0F0F12] border border-[#2A2A2E] rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-[#D4AF37]/50 transition [color-scheme:dark]"
+            />
+          </div>
+          <div className="hidden md:flex items-center pb-3">
+            <span className="text-slate-500 text-lg">—</span>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-[10px] font-mono uppercase tracking-widest text-[#66666E] font-semibold">
+              Tanggal Akhir
+            </label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="bg-[#0F0F12] border border-[#2A2A2E] rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-[#D4AF37]/50 transition [color-scheme:dark]"
+            />
+          </div>
+          <div className="flex items-center gap-1 text-[11px] text-slate-500 font-mono pb-1">
+            <Clock className="w-3.5 h-3.5" />
+            <span>Filter postingan dalam rentang tanggal</span>
           </div>
         </div>
       </div>
@@ -392,7 +473,7 @@ export default function SentimentAnalysis({
                 {totalPosts.toLocaleString()}
               </div>
               <p className="text-[10px] text-slate-400 font-mono">
-                postingan dianalisis
+                postingan ({startDate} — {endDate || startDate})
               </p>
             </div>
 
@@ -557,28 +638,33 @@ export default function SentimentAnalysis({
 
           {/* Posts List */}
           <div className="bg-[#15151A] border border-[#2A2A2E] rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
                 <MessageSquare className="w-4 h-4 text-[#D4AF37]" />
-                Postingan Terkait ({posts.length})
+                Postingan Terkait
               </h3>
-              <div className="text-[10px] font-mono text-slate-500">
-                Menampilkan semua {posts.length} postingan
-              </div>
             </div>
-            <div className="flex flex-wrap gap-2 mb-4">
-              {['X', 'YouTube', 'TikTok'].map(p => {
-                const count = posts.filter(pt => pt.platform === p).length;
-                if (count === 0) return null;
+            <div className="flex flex-wrap items-center gap-1.5 mb-4 pb-4 border-b border-slate-800">
+              {['All', 'X', 'YouTube', 'TikTok'].map(p => {
+                const count = p === 'All' ? posts.length : posts.filter(pt => pt.platform === p).length;
+                if (count === 0 && p !== 'All') return null;
                 return (
-                  <span key={p} className="text-[10px] font-mono bg-slate-900 text-slate-300 px-2.5 py-1 rounded-full border border-slate-800">
-                    ● {p} ({count})
-                  </span>
+                  <button
+                    key={p}
+                    onClick={() => setPostPlatformFilter(p)}
+                    className={`text-[10px] font-mono px-3 py-1.5 rounded-full border transition cursor-pointer ${
+                      postPlatformFilter === p
+                        ? 'bg-[#D4AF37]/20 text-[#D4AF37] border-[#D4AF37]/40 font-bold'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-600'
+                    }`}
+                  >
+                    {p === 'All' ? 'Semua' : `● ${p}`} ({count})
+                  </button>
                 );
               })}
             </div>
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-              {posts.map((post) => (
+              {(postPlatformFilter === 'All' ? posts : posts.filter(p => p.platform === postPlatformFilter)).map((post) => (
                 <div
                   key={post.id}
                   className="p-4 bg-[#0F0F12] border border-[#2A2A2E] rounded-xl hover:border-slate-700 transition"

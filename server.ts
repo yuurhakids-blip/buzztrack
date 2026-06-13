@@ -587,13 +587,30 @@ async function generateKeywordData(keyword: string) {
   let postIdCounter = 0;
   scrapedPosts = scrapedCampaigns.flatMap((camp, ci) => {
     const cfg = intensityConfig[ci % 4];
+    const templates = [
+      `${keyword} benar-benar membawa perubahan positif! #${keyword} #perubahan`,
+      `Saya sangat mendukung ${keyword}. #${keyword} #mendukung`,
+      `${keyword} adalah langkah maju yang cerdas. #${keyword} #maju`,
+      `${keyword} berhasil membuktikan diri. #${keyword} #sukses`,
+      `Senang sekali melihat perkembangan ${keyword}. #${keyword} #bangga`,
+      `${keyword} hanya gimmick belaka. #${keyword} #kecewa`,
+      `Saya curiga ${keyword} tidak seperti yang dikatakan. #${keyword} #curiga`,
+      `${keyword} gagal total. #${keyword} #gagal`,
+      `Stop ${keyword}, ini penipuan. #${keyword} #hoax`,
+      `${keyword} merusak kepercayaan publik. #${keyword} #rusak`,
+      `${keyword} sedang hangat diperbincangkan. #${keyword} #viral`,
+      `Ada yang bisa jelaskan tentang ${keyword}? #${keyword} #info`,
+      `${keyword} trending di mana-mana. #${keyword} #trending`,
+      `Apa pendapat kalian tentang ${keyword}? #${keyword} #opini`,
+      `${keyword} masuk berita utama hari ini. #${keyword} #berita`,
+    ];
     return Array.from({ length: cfg.posts }, (_, i) => {
       const idx = postIdCounter++;
       return {
         id: `post-${id}-${idx}`,
         platform: platforms[idx % 3],
         authorUsername: `user_${keyword}_${idx}`,
-        text: `${keyword} is a trending topic! #${keyword} #viral ${idx % 2 === 0 ? 'Dukung terus!' : 'Tolak!'}`,
+        text: templates[i % templates.length],
         postUrl: `https://${platforms[idx % 3].toLowerCase()}.com/post/${id}-${idx}`,
         publishedAt: new Date(Date.now() - idx * 3600000).toISOString(),
         likes: Math.floor(50 + Math.random() * 500),
@@ -784,6 +801,38 @@ app.get("/api/proxy/models/gemini", async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: "Failed to proxy Gemini models" });
+  }
+});
+
+app.get("/api/proxy/models/opencode", async (req, res) => {
+  try {
+    const key = req.query.key;
+    const resp = await fetch('https://opencode.ai/zen/v1/models', {
+      headers: key ? { 'Authorization': `Bearer ${key}` } : {}
+    });
+    const data = await resp.json();
+    const models = (data.data || []).map((m: any) => ({ id: m.id, name: m.id }));
+    res.json({ models });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to proxy OpenCode models" });
+  }
+});
+
+app.post("/api/proxy/opencode/chat", async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    const resp = await fetch('https://opencode.ai/zen/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': auth || '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req.body)
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "OpenCode proxy failed" });
   }
 });
 
@@ -1112,6 +1161,7 @@ app.get("/api/trend/daily", async (_req, res) => {
   res.json({
     date: today,
     generatedAt: Date.now(),
+    location: 'Indonesia',
     platforms,
     totalPosts,
     dominantPlatform,
@@ -1137,6 +1187,56 @@ if (hasBuild) {
 
 const PORT = process.env.PORT || 3000;
 const API_PORT = process.env.API_PORT || 3001;
+
+// ----- AI Key Status Check -----
+app.post("/api/ai/check-status", async (req, res) => {
+  const { provider, key, model } = req.body;
+  if (!key) return res.json({ valid: false, reason: 'no_key' });
+
+  try {
+    if (provider === 'Gemini') {
+      const testModel = model || 'gemini-1.5-flash';
+      const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${key}`;
+      const resp = await fetch(testUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: 'test' }] }] })
+      });
+      const data = await resp.json();
+      if (data.error) {
+        const msg = (data.error.message || '').toLowerCase();
+        if (msg.includes('quota') || msg.includes('rate') || msg.includes('billing') || msg.includes('resource has been exhausted') || msg.includes('daily limit') || msg.includes('not enough')) {
+          return res.json({ valid: false, reason: 'exhausted' });
+        }
+        return res.json({ valid: false, reason: 'invalid' });
+      }
+      return res.json({ valid: true, reason: 'ok' });
+    } else if (provider === 'OpenRouter') {
+      const resp = await fetch('https://openrouter.ai/api/v1/auth/key', {
+        headers: { 'Authorization': `Bearer ${key}` }
+      });
+      if (resp.status === 401) return res.json({ valid: false, reason: 'invalid' });
+      const data = await resp.json();
+      if (data.error) {
+        const msg = (data.error.message || '').toLowerCase();
+        if (msg.includes('quota') || msg.includes('credit') || msg.includes('insufficient') || msg.includes('rate')) {
+          return res.json({ valid: false, reason: 'exhausted' });
+        }
+        return res.json({ valid: false, reason: 'invalid' });
+      }
+      return res.json({ valid: true, reason: 'ok' });
+    } else if (provider === 'Opencode') {
+      const resp = await fetch('https://opencode.ai/zen/v1/models', {
+        headers: { 'Authorization': `Bearer ${key}` }
+      });
+      if (resp.status === 401) return res.json({ valid: false, reason: 'invalid' });
+      return res.json({ valid: true, reason: 'ok' });
+    }
+    res.json({ valid: false, reason: 'unknown_provider' });
+  } catch {
+    res.json({ valid: false, reason: 'error' });
+  }
+});
 
 // ----- Global error handler -----
 app.use((err: any, _req: any, res: any, _next: any) => {

@@ -58,7 +58,7 @@ export default function App() {
         if (!data) return "Belum ada data tren yang cukup untuk analisis.";
         const { platforms, totalPosts, dominantPlatform, overallSentiment } = data;
         const platformNames = Object.keys(platforms || {}).join(', ');
-        return `Hari ini terpantau ${totalPosts || 0} postingan di ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
+        return `Hari ini terpantau ${totalPosts || 0} postingan di Indonesia dari ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
       };
 
       // Coba AI terlebih dahulu, jika gagal fallback ke heuristic
@@ -70,12 +70,12 @@ export default function App() {
           apiKey: localStorage.getItem(`api-key-${provider}`) || ''
         };
 
-        if (config.apiKey) {
+        if (config.apiKey && aiActive) {
           // Coba dapatkan insight dari AI
           const aiResult = await AIService.analyzeTrend(trendData, config);
           setTrendInsight(aiResult);
         } else {
-          // Tidak ada API key, langsung heuristic
+          // Tidak ada API key atau AI tidak aktif, langsung heuristic
           setTrendInsight({ insight: generateHeuristicInsight(trendData), mode: 'Heuristic' });
         }
       } catch (aiError) {
@@ -139,7 +139,7 @@ export default function App() {
       
       const generateBrief = async () => {
         try {
-          if (config.apiKey) {
+          if (config.apiKey && aiActive) {
             const prompt = `Buat ringkasan intelijen singkat (2-3 kalimat Bahasa Indonesia) untuk kampanye disinformasi ini:
 Judul: ${selectedCampaign.title}
 Platform: ${selectedCampaign.platforms?.join(', ')}
@@ -199,9 +199,39 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
 
   const [activeProvider, setActiveProvider] = useState<string>('Gemini');
   const [aiActive, setAiActive] = useState<boolean>(false);
+  const [aiTokenStatus, setAiTokenStatus] = useState<'active' | 'exhausted' | 'offline'>('offline');
   const [todayTrend, setTodayTrend] = useState<any[]>([]);
 
   const [activeModel, setActiveModel] = useState<string>('');
+
+  const checkAiKeyStatus = async (provider: string, key: string, model?: string) => {
+    if (!key) {
+      setAiActive(false);
+      setAiTokenStatus('offline');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/ai/check-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, key, model })
+      });
+      const data = await resp.json();
+      if (data.valid) {
+        setAiActive(true);
+        setAiTokenStatus('active');
+      } else if (data.reason === 'exhausted') {
+        setAiActive(false);
+        setAiTokenStatus('exhausted');
+      } else {
+        setAiActive(false);
+        setAiTokenStatus('offline');
+      }
+    } catch {
+      setAiActive(false);
+      setAiTokenStatus('offline');
+    }
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem('selectedProvider') || 'Gemini';
@@ -210,7 +240,44 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
     setActiveModel(savedModel);
     const key = localStorage.getItem(`api-key-${saved}`);
     setAiActive(!!key);
+    if (key) {
+      checkAiKeyStatus(saved, key, savedModel);
+    }
+    const statusInterval = setInterval(() => {
+      const p = localStorage.getItem('selectedProvider') || 'Gemini';
+      const m = localStorage.getItem('selectedModel') || '';
+      const k = localStorage.getItem(`api-key-${p}`);
+      if (k) checkAiKeyStatus(p, k, m);
+    }, 60000);
+    return () => clearInterval(statusInterval);
   }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      const p = localStorage.getItem('selectedProvider') || 'Gemini';
+      const m = localStorage.getItem('selectedModel') || '';
+      const k = localStorage.getItem(`api-key-${p}`);
+      setActiveProvider(p);
+      setActiveModel(m);
+      if (k) checkAiKeyStatus(p, k, m);
+      else { setAiActive(false); setAiTokenStatus('offline'); setActiveProvider(p); setActiveModel(m); }
+    };
+    window.addEventListener('ai-status-changed', handler);
+    return () => window.removeEventListener('ai-status-changed', handler);
+  }, []);
+
+  // Listen for tab changes to Settings — refresh status when coming back
+  useEffect(() => {
+    if (activeTab !== 'settings') {
+      const p = localStorage.getItem('selectedProvider') || 'Gemini';
+      const m = localStorage.getItem('selectedModel') || '';
+      const k = localStorage.getItem(`api-key-${p}`);
+      setActiveProvider(p);
+      setActiveModel(m);
+      if (k) checkAiKeyStatus(p, k, m);
+      else { setAiActive(false); setAiTokenStatus('offline'); }
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const fetchTodayTrend = async () => {
@@ -333,7 +400,12 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         apiKey: localStorage.getItem(`api-key-${provider}`) || ''
       };
       
-      const result = await AIService.predictRisk(campaign, todayTrend, config);
+      let result: { trend: string; insight: string; mode: 'AI' | 'Heuristic' };
+      if (config.apiKey && aiActive) {
+        result = await AIService.predictRisk(campaign, todayTrend, config);
+      } else {
+        result = { trend: 'stable', insight: 'Prediksi risiko tidak tersedia (AI nonaktif).', mode: 'Heuristic' };
+      }
       const insightText = `[MODE ${result.mode}] ${result.insight}`;
       setCampaigns(prev => prev.map(c => c.id === campaign.id ? { 
         ...c, 
@@ -495,6 +567,12 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
         apiKey: localStorage.getItem(`api-key-${provider}`) || ''
       };
+
+      if (!config.apiKey || !aiActive) {
+        showNotification('error', 'AI tidak aktif. Periksa API Key di Pengaturan.');
+        setIsAnalyzing(false);
+        return;
+      }
 
       const data = await AIService.analyze(analyzeContent, config);
       setAnalysisResult(data);
@@ -1522,10 +1600,11 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               <SentimentAnalysis 
                 showNotification={showNotification}
                 aiConfig={{
-                  provider: (localStorage.getItem('selectedProvider') as any) || 'Gemini',
-                  model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
-                  apiKey: localStorage.getItem(`api-key-${localStorage.getItem('selectedProvider') || 'Gemini'}`) || ''
+                  provider: activeProvider,
+                  model: activeModel,
+                  apiKey: localStorage.getItem(`api-key-${activeProvider}`) || ''
                 }}
+                aiActive={aiActive}
               />
             </Suspense>
           </div>
@@ -1958,10 +2037,20 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
 
       {/* Fixed AI Status Indicator at Bottom Right */}
       <div className="fixed bottom-4 right-4 z-50">
-        <div className={`px-4 py-2 rounded-xl shadow-lg border transition-all duration-300 flex items-center gap-2 ${aiActive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-slate-900 border-slate-700 text-slate-400'}`}>
-          <span className={`w-2.5 h-2.5 rounded-full ${aiActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`}></span>
+        <div className={`px-4 py-2 rounded-xl shadow-lg border transition-all duration-300 flex items-center gap-2 ${
+          aiTokenStatus === 'active' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+          aiTokenStatus === 'exhausted' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
+          'bg-slate-900 border-slate-700 text-slate-400'
+        }`}>
+          <span className={`w-2.5 h-2.5 rounded-full ${
+            aiTokenStatus === 'active' ? 'bg-emerald-400 animate-pulse' :
+            aiTokenStatus === 'exhausted' ? 'bg-red-400' :
+            'bg-slate-600'
+          }`}></span>
           <span className="text-[11px] font-mono font-bold uppercase tracking-wider">
-            {aiActive ? `AI ${activeProvider} Aktif` : 'AI Offline'}
+            {aiTokenStatus === 'active' ? `AI ${activeProvider} Aktif` :
+             aiTokenStatus === 'exhausted' ? 'AI Tidak Aktif - Token Habis' :
+             'AI Offline'}
           </span>
         </div>
       </div>

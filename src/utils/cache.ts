@@ -1,17 +1,17 @@
 export const AICache = {
   get: <T>(key: string): T | null => {
-    const cached = localStorage.getItem(`aicache_${key}`);
+    const cached = localStorage.getItem(`aicache_v2_${key}`);
     if (!cached) return null;
     const { data, timestamp } = JSON.parse(cached);
     // 5-minute TTL
     if (Date.now() - timestamp > 300000) {
-      localStorage.removeItem(`aicache_${key}`);
+      localStorage.removeItem(`aicache_v2_${key}`);
       return null;
     }
     return data;
   },
   set: <T>(key: string, data: T) => {
-    localStorage.setItem(`aicache_${key}`, JSON.stringify({ data, timestamp: Date.now() }));
+    localStorage.setItem(`aicache_v2_${key}`, JSON.stringify({ data, timestamp: Date.now() }));
   },
   generateKey: (prefix: string, content: string) => {
     // Simple hash for content

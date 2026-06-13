@@ -2,7 +2,7 @@ import { AnalysisResponse } from '../../core/domain/entities';
 import { AICache } from '../../utils/cache';
 
 export interface AIConfig {
-  provider: 'Gemini' | 'OpenRouter';
+  provider: 'Gemini' | 'OpenRouter' | 'Opencode';
   model: string;
   apiKey: string;
 }
@@ -18,8 +18,12 @@ export class AIService {
     let result: AnalysisResponse;
     if (provider === 'Gemini') {
       result = await this.callGemini(content, model, apiKey);
-    } else {
+    } else if (provider === 'OpenRouter') {
       result = await this.callOpenRouter(content, model, apiKey);
+    } else if (provider === 'Opencode') {
+      result = await this.callOpencodePerPost(content, model, apiKey);
+    } else {
+      throw new Error(`Provider "${provider}" belum didukung untuk analisis per-post.`);
     }
     AICache.set(cacheKey, result);
     return result;
@@ -54,6 +58,20 @@ export class AIService {
     if (result.error) throw new Error(result.error.message || 'OpenRouter API error');
     const text = result.choices?.[0]?.message?.content || '{}';
     return this.parseAIResponse(text, model, 'OpenRouter');
+  }
+
+  private static async callOpencodePerPost(content: string, model: string, key: string): Promise<AnalysisResponse> {
+    const url = `/api/proxy/opencode/chat`;
+    const prompt = `Analisis apakah teks ini buzzer/bot media sosial. Teks: "${content}". 
+    Berikan jawaban dalam format JSON (Bahasa Indonesia): { "isBuzzer": boolean, "confidenceScore": number, "botCharacteristics": string[], "sentimentScore": number, "detectedNarratives": string[], "summary": string, "verdict": string }`;
+    
+    const payload = { model, messages: [{ role: 'user', content: prompt }] };
+    
+    const response = await fetch(url, { method: 'POST', headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const result = await response.json();
+    if (result.error) throw new Error(result.error.message || 'OpenCode API error');
+    const text = result.choices?.[0]?.message?.content || '{}';
+    return this.parseAIResponse(text, model, 'Opencode');
   }
 
   private static parseAIResponse(text: string, model: string, source: string): AnalysisResponse {
@@ -104,8 +122,9 @@ export class AIService {
     Identify potential botnet clusters within this platform. Return JSON with cluster assignments: { "clusters": [{ "clusterId": "string", "nodeIds": ["string"], "reason": "string" }] }`;
 
     try {
-      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
+      const resp = await this.callProviderRaw(prompt, model, apiKey, provider);
       const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '');
+      const parsed = JSON.parse(cleanJson);
       const result = { clusters: JSON.parse(cleanJson).clusters, mode: 'AI' as const };
       AICache.set(cacheKey, result);
       return result;
@@ -127,41 +146,46 @@ export class AIService {
       ? `Tinjau ringkasan kampanye berikut dan berikan ringkasan intelijen singkat (2-3 kalimat Bahasa Indonesia) tentang kemungkinan perilaku tidak otentik yang terkoordinasi: ${posts[0].text}`
       : `Tinjau postingan berikut dan berikan ringkasan poin-poin bukti perilaku tidak otentik yang terkoordinasi (CIB) dalam Bahasa Indonesia. Postingan: ${JSON.stringify(posts.slice(0, 10))}`;
 
-    try {
-      if (!apiKey) throw new Error("No API Key");
-      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
-      const result = { summary: typeof resp === 'string' ? resp : (resp.summary || "Bukti terkumpul."), mode: 'AI' as const };
-      AICache.set(cacheKey, result);
-      return result;
-    } catch (e) {
-      let heuristicSummary = "";
-      if (isCampaignSummary && posts[0]?.text) {
-        const text = posts[0].text;
-        const judulMatch = text.match(/Judul: (.+)/);
-        const platformMatch = text.match(/Platform: (.+)/);
-        const intensitasMatch = text.match(/Intensitas: (.+)/);
-        const rasioBotMatch = text.match(/Rasio Bot: (\d+)%/);
-        
-        const judul = judulMatch ? judulMatch[1] : "Kampanye";
-        const platform = platformMatch ? platformMatch[1] : "multi-platform";
-        const intensitas = intensitasMatch ? intensitasMatch[1] : "Medium";
-        const rasioBot = rasioBotMatch ? rasioBotMatch[1] : "50";
-        
-        heuristicSummary = `Kampanye "${judul}" terdeteksi aktif di ${platform} dengan intensitas ${intensitas}. Sekitar ${rasioBot}% aktivitas menunjukkan indikasi akun buzzer terkoordinasi yang menyebarkan narasi serentak.`;
-      } else if (posts.length > 0) {
-        heuristicSummary = `Terdeteksi ${posts.length} postingan yang menunjukkan pola kemiripan tinggi, kemungkinan sebagai bagian dari upaya penyebaran narasi terkoordinasi.`;
-      } else {
-        heuristicSummary = "Data postingan tidak cukup untuk analisis AI.";
-      }
-      
-      return { summary: heuristicSummary, mode: 'Heuristic' };
+    if (!apiKey) {
+      return { summary: this.getHeuristicSummary(posts, isCampaignSummary), mode: 'Heuristic' };
     }
+
+    const resp = await this.callProviderRaw(prompt, model, apiKey, provider);
+    const result = { summary: typeof resp === 'string' ? resp : (resp.summary || "Bukti terkumpul."), mode: 'AI' as const };
+    AICache.set(cacheKey, result);
+    return result;
+  }
+
+  private static getHeuristicSummary(posts: any[], isCampaignSummary: boolean): string {
+    let heuristicSummary = "";
+    if (isCampaignSummary && posts[0]?.text) {
+      const text = posts[0].text;
+      const judulMatch = text.match(/Judul: (.+)/);
+      const platformMatch = text.match(/Platform: (.+)/);
+      const intensitasMatch = text.match(/Intensitas: (.+)/);
+      const rasioBotMatch = text.match(/Rasio Bot: (\d+)%/);
+      
+      const judul = judulMatch ? judulMatch[1] : "Kampanye";
+      const platform = platformMatch ? platformMatch[1] : "multi-platform";
+      const intensitas = intensitasMatch ? intensitasMatch[1] : "Medium";
+      const rasioBot = rasioBotMatch ? rasioBotMatch[1] : "50";
+      
+      heuristicSummary = `Kampanye "${judul}" terdeteksi aktif di ${platform} dengan intensitas ${intensitas}. Sekitar ${rasioBot}% aktivitas menunjukkan indikasi akun buzzer terkoordinasi yang menyebarkan narasi serentak.`;
+    } else if (posts.length > 0) {
+      heuristicSummary = `Terdeteksi ${posts.length} postingan yang menunjukkan pola kemiripan tinggi, kemungkinan sebagai bagian dari upaya penyebaran narasi terkoordinasi.`;
+    } else {
+      heuristicSummary = "Data postingan tidak cukup untuk analisis AI.";
+    }
+    return heuristicSummary;
   }
 
   private static async callGeminiRaw(prompt: string, model: string, key: string): Promise<any> {
     const url = `/api/proxy/gemini/generate?model=${model}&key=${key}`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => {
+      console.error('[AI] Gemini Request timeout');
+      controller.abort();
+    }, 60000);
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -180,7 +204,10 @@ export class AIService {
   private static async callOpenRouterRaw(prompt: string, model: string, key: string): Promise<any> {
     const url = `/api/proxy/openrouter/chat`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => {
+      console.error('[AI] OpenRouter Request timeout');
+      controller.abort();
+    }, 60000);
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -199,6 +226,38 @@ export class AIService {
     }
   }
 
+  private static async callOpencodeRaw(prompt: string, model: string, key: string): Promise<any> {
+    const url = `/api/proxy/opencode/chat`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.error('[AI] Opencode Request timeout');
+      controller.abort();
+    }, 60000);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }] }),
+        signal: controller.signal
+      });
+      const result = await response.json();
+      if (result.error) throw new Error(result.error.message || 'OpenCode API error');
+      return result.choices?.[0]?.message?.content || "";
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private static callProviderRaw(prompt: string, model: string, key: string, provider: string): Promise<any> {
+    if (provider === 'Gemini') return this.callGeminiRaw(prompt, model, key);
+    if (provider === 'OpenRouter') return this.callOpenRouterRaw(prompt, model, key);
+    if (provider === 'Opencode') return this.callOpencodeRaw(prompt, model, key);
+    throw new Error(`Provider "${provider}" tidak dikenal. Fallback ke heuristic.`);
+  }
+
   static async analyzeTrend(trendData: any, config: AIConfig): Promise<{ insight: string, mode: 'AI' | 'Heuristic' }> {
     const { provider, model, apiKey } = config;
     const cacheKey = AICache.generateKey('trend', JSON.stringify(trendData));
@@ -209,18 +268,18 @@ export class AIService {
       if (!data) return "[MODE HEURISTIK] Belum ada data tren yang cukup untuk analisis.";
       const { platforms, totalPosts, dominantPlatform, overallSentiment } = data;
       const platformNames = Object.keys(platforms || {}).join(', ');
-      return `[MODE HEURISTIK] Hari ini terpantau ${totalPosts || 0} postingan di ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
+      return `[MODE HEURISTIK] Hari ini terpantau ${totalPosts || 0} postingan di Indonesia dari ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
     };
 
     if (!apiKey) {
       return { insight: generateHeuristicInsight(trendData), mode: 'Heuristic' };
     }
 
-    const prompt = `Analisis data tren media sosial hari ini: ${JSON.stringify(trendData)}. 
-    Berikan insight singkat (1-2 kalimat Bahasa Indonesia) mengenai dinamika platform dan dominasi narasi.`;
+    const prompt = `Analisis data tren media sosial di Indonesia hari ini: ${JSON.stringify(trendData)}. 
+    Berikan insight singkat (1-2 kalimat Bahasa Indonesia) mengenai dinamika platform dan dominasi narasi di Indonesia.`;
 
     try {
-      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
+      const resp = await this.callProviderRaw(prompt, model, apiKey, provider);
       const insight = typeof resp === 'string' ? resp : generateHeuristicInsight(trendData);
       AICache.set(cacheKey, { insight });
       return { insight, mode: 'AI' };
@@ -241,7 +300,7 @@ export class AIService {
     Predict future risk trend (rising, stable, falling) and provide 1-sentence deep insight. Return JSON: { "trend": "rising|stable|falling", "insight": "string" }`;
 
     try {
-      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
+    const resp = await this.callProviderRaw(prompt, model, apiKey, provider);
       const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '');
       const parsed = JSON.parse(cleanJson);
       const result = { ...parsed, mode: 'AI' as const };
@@ -313,30 +372,29 @@ export class AIService {
     Berikan jawaban dalam format JSON (Bahasa Indonesia) dengan struktur: { "sentiment": "Positif" | "Negatif" | "Netral", "score": 0-100 (50 netral), "summary": "ringkasan singkat (2-3 kalimat)", "keywords": ["kata kunci penting"] }`;
 
     try {
-      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
+      const resp = await this.callProviderRaw(prompt, model, apiKey, provider);
       const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '');
       const parsed = JSON.parse(cleanJson);
       const result = { ...parsed, mode: 'AI' as const };
       AICache.set(cacheKey, result);
       return result;
     } catch {
-      const result = generateHeuristicSentiment();
-      AICache.set(cacheKey, result);
-      return result;
+      return generateHeuristicSentiment();
     }
   }
 
   static async analyzePostSentimentsBatch(posts: { id: string; text: string }[], config: AIConfig): Promise<{ postSentiments: { postId: string; sentiment: 'Positif' | 'Negatif' | 'Netral'; score: number }[]; mode: 'AI' | 'Heuristic' }> {
     const contentPreview = posts.slice(0, 5).map(p => (p.text || '').substring(0, 30)).join('|');
-    const cacheKey = AICache.generateKey('sentiment_batch', `${contentPreview}_${config.model}_${posts.length}`);
+    const hasKey = !!config.apiKey;
+    const cacheKey = AICache.generateKey('sentiment_batch', `${contentPreview}_${config.model}_${posts.length}_${hasKey}`);
     const cached = AICache.get<{ postSentiments: { postId: string; sentiment: 'Positif' | 'Negatif' | 'Netral'; score: number }[]; mode: 'AI' | 'Heuristic' }>(cacheKey);
     if (cached) return cached;
 
     const { provider, model, apiKey } = config;
 
     const generateHeuristic = () => {
-      const positiveWords = ['bagus', 'hebat', 'sukses', 'menyenangkan', 'terbaik', 'luar biasa', 'cinta', 'bangga', 'positif', 'baik', 'senang', 'dukung', 'keren', 'salut', 'maju', 'cerdas', 'indah', 'bermanfaat', 'berhasil', 'inovatif', 'pintar'];
-      const negativeWords = ['buruk', 'jelek', 'gagal', 'menyedihkan', 'terburuk', 'mengecewakan', 'benci', 'kecewa', 'negatif', 'penipuan', 'hoax', 'jahat', 'bohong', 'tolak', 'korupsi', 'rusak', 'salah', 'curang', 'parah', 'ancam', 'krisis', 'provokasi'];
+      const positiveWords = ['bagus', 'hebat', 'sukses', 'menyenangkan', 'terbaik', 'luar biasa', 'cinta', 'bangga', 'positif', 'baik', 'senang', 'dukung', 'keren', 'salut', 'maju', 'cerdas', 'indah', 'bermanfaat', 'berhasil', 'inovatif', 'pintar', 'transparan', 'adil', 'bersih'];
+      const negativeWords = ['buruk', 'jelek', 'gagal', 'menyedihkan', 'terburuk', 'mengecewakan', 'benci', 'kecewa', 'negatif', 'penipuan', 'hoax', 'jahat', 'bohong', 'tolak', 'korupsi', 'rusak', 'salah', 'curang', 'bodoh', 'parah', 'ancam', 'krisis', 'darurat', 'provokasi'];
       const postSentiments = posts.map(p => {
         const lower = (p.text || '').toLowerCase();
         let posCount = 0;
@@ -370,7 +428,7 @@ export class AIService {
     Penting: output HARUS array JSON, bukan objek.`;
 
     try {
-      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
+      const resp = await this.callProviderRaw(prompt, model, apiKey, provider);
       const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleanJson);
       const arr = Array.isArray(parsed) ? parsed : (parsed.postSentiments || parsed.results || []);
@@ -383,9 +441,7 @@ export class AIService {
       AICache.set(cacheKey, result);
       return result;
     } catch {
-      const result = generateHeuristic();
-      AICache.set(cacheKey, result);
-      return result;
+      return generateHeuristic();
     }
   }
 }
