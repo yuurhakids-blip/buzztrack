@@ -170,36 +170,14 @@ export default function SentimentAnalysis({
           });
       } catch { /* fallback */ }
 
-      // Jika ingin memastikan data baru (scrap), panggil search eksplisit
+      // Isolated search that doesn't affect global state
       try {
         showNotification('success', 'Memulai pencarian data real-time via scraper...');
-        await api.social.search(topic);
-        
-        // Polling singkat untuk memastikan data scraper tersimpan di db
-        await new Promise(resolve => setTimeout(resolve, 2000)); 
-        const postsData = await api.social.posts.list();
-        scrapedPosts = postsData
-          .filter(p => p.text.toLowerCase().includes(topic.toLowerCase()))
-          .map(p => {
-            const { sentiment, score } = analyzePostSentiment(p.text);
-            return {
-              id: p.id,
-              text: p.text,
-              authorUsername: p.authorUsername,
-              platform: p.platform,
-              date: p.publishedAt.split('T')[0],
-              likes: p.likes,
-              comments: p.comments,
-              shares: p.shares,
-              reach: p.reach,
-              engagementRate: p.engagementRate,
-              postUrl: p.postUrl,
-              sentiment,
-              sentimentScore: score
-            };
-          });
+        const sentimentData = await api.social.searchSentiment(topic);
+        scrapedPosts = sentimentData.posts || [];
+        setPosts(scrapedPosts);
       } catch (e) {
-        console.error('[Sentiment] Search/posts fetch failed:', e);
+        console.error('[Sentiment] Search failed:', e);
         showNotification('error', 'Gagal mengambil data real-time, menggunakan data lokal.');
       }
 

@@ -143,6 +143,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ keyword }),
       }),
+    searchSentiment: (keyword: string) =>
+      request<{ success: boolean; method: string; keyword?: string; campaigns?: any[]; accounts?: any[]; posts?: any[] }>('/api/social/search-sentiment', {
+        method: 'POST',
+        body: JSON.stringify({ keyword }),
+      }),
   },
 
   // Network Graph
