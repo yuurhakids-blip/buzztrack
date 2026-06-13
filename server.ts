@@ -1,10 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-// Startup credential check
-console.log("[ENV CHECK] TWITTER_COOKIES:", process.env.TWITTER_COOKIES ? process.env.TWITTER_COOKIES.slice(0, 30) + "..." : "NOT SET");
-console.log("[ENV CHECK] YOUTUBE_API_KEY:", process.env.YOUTUBE_API_KEY ? process.env.YOUTUBE_API_KEY.slice(0, 15) + "..." : "NOT SET");
-console.log("[ENV CHECK] TIKTOK_MS_TOKEN:", process.env.TIKTOK_MS_TOKEN ? process.env.TIKTOK_MS_TOKEN.slice(0, 15) + "..." : "NOT SET");
 
 import express from "express";
 import cors from "cors";
