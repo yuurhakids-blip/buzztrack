@@ -34,17 +34,14 @@ export default function App() {
       
       // Jika tidak ada data dan autoScrape aktif, lakukan scraping trending otomatis
       if (autoScrape && (!trendData || trendData.totalPosts === 0)) {
-        // Lakukan scraping trending otomatis
+        // Lakukan scraping trending otomatis — HANYA untuk data tren, tidak mengubah data tab lain
         const searchResp = await fetch('/api/social/scrape-trending', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         });
         
         if (searchResp.ok) {
-          const searchResult = await searchResp.json();
-          setCampaigns(searchResult.campaigns || []);
-          setAccounts(searchResult.accounts || []);
-          // Ambil data tren lagi setelah pencarian
+          // Ambil data tren lagi setelah scraping (NOT touching campaigns/accounts global state)
           const newTrendResp = await fetch('/api/trend/daily');
           trendData = await newTrendResp.json();
         }

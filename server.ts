@@ -521,11 +521,16 @@ function computeSentimentTimeline() {
   }));
 }
 
-// ---------- In-memory store for scraped data ----------
+// ---------- In-memory store for scraped data (global investigation) ----------
 let scrapedCampaigns: any[] = [];
 let scrapedAccounts: any[] = [];
 let scrapedPosts: any[] = [];
 let scrapedTimeline: any[] = [];
+
+// ---------- Isolated in-memory store for trend data (does NOT affect investigation tabs) ----------
+let trendPosts: any[] = [];
+let trendCampaigns: any[] = [];
+let trendAccounts: any[] = [];
 
 async function generateKeywordData(keyword: string) {
   const id = Date.now().toString();
@@ -916,13 +921,125 @@ app.post("/api/social/search", async (req, res) => {
   });
 });
 
+// Generate trend-only data WITHOUT touching global scrapedCampaigns/scrapedAccounts/scrapedPosts
+function generateTrendData(keyword: string) {
+  const id = Date.now().toString();
+  const platforms = ['X', 'TikTok', 'YouTube'];
+  const templates = [
+    `${keyword} benar-benar membawa perubahan positif! #${keyword} #perubahan`,
+    `Saya sangat mendukung ${keyword}. #${keyword} #mendukung`,
+    `${keyword} adalah langkah maju yang cerdas. #${keyword} #maju`,
+    `${keyword} berhasil membuktikan diri. #${keyword} #sukses`,
+    `Senang sekali melihat perkembangan ${keyword}. #${keyword} #bangga`,
+    `${keyword} hanya gimmick belaka. #${keyword} #kecewa`,
+    `${keyword} gagal total. #${keyword} #gagal`,
+    `Stop ${keyword}, ini penipuan. #${keyword} #hoax`,
+    `${keyword} sedang hangat diperbincangkan. #${keyword} #viral`,
+    `Ada yang bisa jelaskan tentang ${keyword}? #${keyword} #info`,
+    `${keyword} trending di mana-mana. #${keyword} #trending`,
+    `Apa pendapat kalian tentang ${keyword}? #${keyword} #opini`,
+    `${keyword} masuk berita utama hari ini. #${keyword} #berita`,
+    `${keyword} terus menjadi sorotan publik. #${keyword} #sorotan`,
+    `Perlu lebih banyak informasi tentang ${keyword}. #${keyword} #info`,
+  ];
+
+  trendPosts = Array.from({ length: 45 }, (_, i) => ({
+    id: `trend-post-${id}-${i}`,
+    platform: platforms[i % 3],
+    authorUsername: `trend_user_${i}`,
+    text: templates[i % templates.length],
+    postUrl: `#`,
+    publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
+    likes: Math.floor(50 + Math.random() * 500),
+    comments: Math.floor(10 + Math.random() * 100),
+    shares: Math.floor(5 + Math.random() * 200),
+    reach: Math.floor(1000 + Math.random() * 10000),
+    engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+  }));
+
+  const intensityConfig = [
+    { accounts: 5, posts: 8, reach: 50000 },
+    { accounts: 15, posts: 20, reach: 150000 },
+    { accounts: 35, posts: 45, reach: 400000 },
+  ];
+  trendCampaigns = Array.from({ length: 3 }, (_, i) => {
+    const cfg = intensityConfig[i % 3];
+    return {
+      id: `trend-camp-${id}-${i}`,
+      title: `${keyword} Campaign ${i + 1}`,
+      topic: keyword,
+      platforms: [platforms[i % 3]],
+      intensity: ['Low', 'Medium', 'High'][i % 3],
+      status: 'Active',
+      botRatio: 0.5 + Math.random() * 0.45,
+      reach: cfg.reach,
+      hashtags: [`#${keyword}`],
+      buzzerCount: cfg.accounts,
+    };
+  });
+
+  trendAccounts = Array.from({ length: 10 }, (_, i) => ({
+    id: `trend-acc-${id}-${i}`,
+    username: `trend_buzzer_${i}`,
+    displayName: `Trend Buzzer #${i}`,
+    platform: platforms[i % 3],
+    botScore: Math.floor(60 + Math.random() * 40),
+    status: 'Flagged',
+  }));
+}
+
+// Map real scraped results into trend-specific stores (does NOT touch global state)
+function mapTrendResults(results: any[], keyword: string) {
+  const id = Date.now().toString();
+  const platformLabels: Record<string, string> = { X: 'X', twitter: 'X', youtube: 'YouTube', tiktok: 'TikTok' };
+  const nonEmpty = results.filter(r => r.results && r.results.length > 0);
+  const allPosts: any[] = [];
+
+  nonEmpty.forEach(platformResult => {
+    const platform = platformLabels[platformResult.platform] || platformResult.platform;
+    (platformResult.results || []).forEach((item: any, idx: number) => {
+      allPosts.push({
+        id: `trend-post-${id}-${platform}-${idx}`,
+        platform,
+        authorUsername: item.author || 'unknown',
+        text: item.snippet || item.title || '',
+        postUrl: item.url || '',
+        publishedAt: item.publishedAt || new Date().toISOString(),
+        likes: item.likes || 0,
+        comments: item.comments || 0,
+        shares: item.shares || 0,
+        reach: (item.views || 0) + (item.likes || 0) * 10,
+        engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+      });
+    });
+  });
+
+  trendPosts = allPosts;
+  trendCampaigns = nonEmpty.map((r, i) => {
+    const platform = platformLabels[r.platform] || r.platform;
+    const posts = r.results || [];
+    return {
+      id: `trend-camp-${id}-${i}`,
+      title: `${keyword} - ${platform}`,
+      topic: keyword,
+      platforms: [platform],
+      intensity: ['Low', 'Medium', 'High', 'Critical'][i % 4],
+      status: 'Active',
+      botRatio: 0.5 + Math.random() * 0.45,
+      reach: posts.reduce((acc: number, p: any) => acc + (p.views || 0) + (p.likes || 0) * 10, 0) || Math.floor(50000 + Math.random() * 200000),
+      hashtags: [`#${keyword}`],
+      buzzerCount: posts.length,
+    };
+  });
+  trendAccounts = [];
+}
+
 app.post("/api/social/scrape-trending", async (req, res) => {
-  // Try real Python scrapers first (skip if DISABLE_PYTHON_SCRAPERS=true, or if required credentials are missing)
   let twitter = { success: false, platform: 'X', error: 'disabled' };
   let youtube = { success: false, platform: 'YouTube', error: 'disabled' };
   let tiktok = { success: false, platform: 'TikTok', error: 'disabled' };
   const twitterConfigured = !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token"));
-  const youtubeConfigured = true; // YouTube doesn't need API key for trending search
+  const youtubeConfigured = true;
   const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN);
 
   if (!process.env.DISABLE_PYTHON_SCRAPERS) {
@@ -930,9 +1047,7 @@ app.post("/api/social/scrape-trending", async (req, res) => {
     if (twitterConfigured) scraperPromises.push(runPythonTrendingScraper("twitter", 50));
     if (youtubeConfigured) scraperPromises.push(runPythonTrendingScraper("youtube", 50));
     if (tiktokConfigured) scraperPromises.push(runPythonTrendingScraper("tiktok", 50));
-    if (scraperPromises.length === 0) {
-      console.log("No scrapers configured — check .env for credentials");
-    } else {
+    if (scraperPromises.length > 0) {
       const results = await Promise.all(scraperPromises);
       results.forEach(r => {
         if (r.platform === 'X') twitter = r;
@@ -940,8 +1055,6 @@ app.post("/api/social/scrape-trending", async (req, res) => {
         else if (r.platform === 'TikTok') tiktok = r;
       });
     }
-  } else {
-    console.log("Python scrapers disabled via DISABLE_PYTHON_SCRAPERS env var");
   }
 
   const succeeded = [twitter, youtube, tiktok].filter(r => r.success === true);
@@ -949,22 +1062,15 @@ app.post("/api/social/scrape-trending", async (req, res) => {
   const keyword = "Trending Today";
 
   if (succeeded.length > 0 && hasRealData) {
-    mapScraperResults(succeeded, keyword);
-    await computeBuzzerScores();
+    mapTrendResults(succeeded, keyword);
   } else {
-    if (succeeded.length > 0 && !hasRealData) {
-      console.warn("Scrapers connected but returned 0 results, using synthetic data");
-    } else {
-      console.warn("All Python scrapers failed, using synthetic data:", { twitter: twitter.error, youtube: youtube.error, tiktok: tiktok.error });
-    }
-    generateKeywordData(keyword);
+    generateTrendData(keyword);
   }
+
   res.json({
     success: true,
-    method: scrapedAccounts.length > 0 ? (hasRealData ? "python" : "synthetic") : "synthetic",
+    method: trendPosts.length > 0 ? (hasRealData ? "python" : "synthetic") : "synthetic",
     keyword,
-    campaigns: scrapedCampaigns,
-    accounts: scrapedAccounts,
   });
 });
 
@@ -1120,13 +1226,66 @@ app.get("/api/trend", async (_req, res) => {
   res.json(computeSentimentTimeline().slice(-1));
 });
 
+app.post("/api/social/sentiment-posts", async (req, res) => {
+  const { keyword } = req.body;
+  if (!keyword) return res.status(400).json({ error: "keyword required" });
+
+  // First: try to filter from existing global scrapedPosts (does NOT trigger a new search)
+  const existing = scrapedPosts.filter((p: any) =>
+    p.text && p.text.toLowerCase().includes(keyword.toLowerCase())
+  );
+  if (existing.length > 0) {
+    return res.json({ posts: existing, source: 'existing' });
+  }
+
+  // Fallback: generate isolated synthetic posts for this keyword ONLY (does NOT touch global state)
+  const id = Date.now().toString();
+  const platforms = ['X', 'TikTok', 'YouTube'];
+  const templates = [
+    `${keyword} benar-benar membawa perubahan positif! #${keyword} #perubahan`,
+    `Saya sangat mendukung ${keyword}. #${keyword} #mendukung`,
+    `${keyword} adalah langkah maju yang cerdas. #${keyword} #maju`,
+    `${keyword} berhasil membuktikan diri. #${keyword} #sukses`,
+    `Senang sekali melihat perkembangan ${keyword}. #${keyword} #bangga`,
+    `${keyword} hanya gimmick belaka. #${keyword} #kecewa`,
+    `Saya curiga ${keyword} tidak seperti yang dikatakan. #${keyword} #curiga`,
+    `${keyword} gagal total. #${keyword} #gagal`,
+    `Stop ${keyword}, ini penipuan. #${keyword} #hoax`,
+    `${keyword} merusak kepercayaan publik. #${keyword} #rusak`,
+    `${keyword} sedang hangat diperbincangkan. #${keyword} #viral`,
+    `Ada yang bisa jelaskan tentang ${keyword}? #${keyword} #info`,
+    `${keyword} trending di mana-mana. #${keyword} #trending`,
+    `Apa pendapat kalian tentang ${keyword}? #${keyword} #opini`,
+    `${keyword} masuk berita utama hari ini. #${keyword} #berita`,
+  ];
+
+  const localPosts = Array.from({ length: 30 }, (_, i) => ({
+    id: `sentiment-post-${id}-${i}`,
+    platform: platforms[i % 3],
+    authorUsername: `user_${keyword.replace(/\s+/g, '_')}_${i}`,
+    text: templates[i % templates.length],
+    postUrl: '#',
+    publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
+    likes: Math.floor(50 + Math.random() * 500),
+    comments: Math.floor(10 + Math.random() * 100),
+    shares: Math.floor(5 + Math.random() * 200),
+    reach: Math.floor(1000 + Math.random() * 10000),
+    engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+  }));
+
+  res.json({ posts: localPosts, source: 'synthetic' });
+});
+
 app.get("/api/trend/daily", async (_req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const fourteenDaysAgo = new Date();
   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
-  
+
+  // Use trendPosts if available, otherwise fall back to scrapedPosts (read-only, no mutation)
+  const sourcePosts = trendPosts.length > 0 ? trendPosts : scrapedPosts;
+
   // Ambil postingan 14 hari terakhir (tidak hanya hari ini)
-  const relevantPosts = scrapedPosts.filter((p: any) => {
+  const relevantPosts = sourcePosts.filter((p: any) => {
     if (!p.publishedAt) return true; // Jika tidak ada tanggal, tetap masukkan
     const postDate = new Date(p.publishedAt);
     return postDate >= fourteenDaysAgo;

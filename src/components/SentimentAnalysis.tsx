@@ -145,62 +145,31 @@ export default function SentimentAnalysis({
     try {
       let scrapedPosts: PostData[] = [];
 
-      // Coba ambil data dari backend terlebih dahulu
+      // Gunakan endpoint sentiment khusus — TIDAK mengubah data tab lain (intel kampanye, profil, dll.)
       try {
-        const postsData = await api.social.posts.list();
-        scrapedPosts = postsData
-          .filter(p => p.text.toLowerCase().includes(topic.toLowerCase()))
-          .map(p => {
-            const { sentiment, score } = analyzePostSentiment(p.text);
-            return {
-              id: p.id,
-              text: p.text,
-              authorUsername: p.authorUsername,
-              platform: p.platform,
-              date: p.publishedAt.split('T')[0],
-              likes: p.likes,
-              comments: p.comments,
-              shares: p.shares,
-              reach: p.reach,
-              engagementRate: p.engagementRate,
-              postUrl: p.postUrl,
-              sentiment,
-              sentimentScore: score
-            };
-          });
-      } catch { /* fallback */ }
-
-      // Jika ingin memastikan data baru (scrap), panggil search eksplisit
-      try {
-        showNotification('success', 'Memulai pencarian data real-time via scraper...');
-        await api.social.search(topic);
-        
-        // Polling singkat untuk memastikan data scraper tersimpan di db
-        await new Promise(resolve => setTimeout(resolve, 2000)); 
-        const postsData = await api.social.posts.list();
-        scrapedPosts = postsData
-          .filter(p => p.text.toLowerCase().includes(topic.toLowerCase()))
-          .map(p => {
-            const { sentiment, score } = analyzePostSentiment(p.text);
-            return {
-              id: p.id,
-              text: p.text,
-              authorUsername: p.authorUsername,
-              platform: p.platform,
-              date: p.publishedAt.split('T')[0],
-              likes: p.likes,
-              comments: p.comments,
-              shares: p.shares,
-              reach: p.reach,
-              engagementRate: p.engagementRate,
-              postUrl: p.postUrl,
-              sentiment,
-              sentimentScore: score
-            };
-          });
+        showNotification('success', 'Mengambil data postingan untuk analisis sentimen...');
+        const result = await api.social.sentimentPosts(topic);
+        scrapedPosts = (result.posts || []).map((p: any) => {
+          const { sentiment, score } = analyzePostSentiment(p.text);
+          return {
+            id: p.id,
+            text: p.text,
+            authorUsername: p.authorUsername,
+            platform: p.platform,
+            date: (p.publishedAt || new Date().toISOString()).split('T')[0],
+            likes: p.likes || 0,
+            comments: p.comments || 0,
+            shares: p.shares || 0,
+            reach: p.reach || 0,
+            engagementRate: p.engagementRate || 0,
+            postUrl: p.postUrl || '#',
+            sentiment,
+            sentimentScore: score
+          };
+        });
       } catch (e) {
-        console.error('[Sentiment] Search/posts fetch failed:', e);
-        showNotification('error', 'Gagal mengambil data real-time, menggunakan data lokal.');
+        console.error('[Sentiment] sentiment-posts fetch failed:', e);
+        showNotification('error', 'Gagal mengambil data postingan untuk sentimen.');
       }
 
       // Filter berdasarkan rentang tanggal
