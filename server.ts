@@ -72,7 +72,7 @@ app.get("/api/stats", async (req, res) => {
   const campaigns = scrapedCampaigns.length > 0 ? scrapedCampaigns : await campaignRepo.getAll();
   const accounts = scrapedAccounts.length > 0 ? scrapedAccounts : await accountRepo.getAll();
   const totalReach = campaigns.reduce((acc: number, c: any) => acc + c.reach, 0);
-  const activeBuzzerCount = campaigns.reduce((acc: number, c: any) => acc + c.buzzerCount, 0) + accounts.length;
+  const activeBuzzerCount = accounts.length;
   const avgBotScore = Math.round(
     accounts.reduce((acc: number, a: any) => acc + a.botScore, 0) / (accounts.length || 1)
   );
@@ -533,52 +533,95 @@ async function generateKeywordData(keyword: string) {
   const intensity = ['Low', 'Medium', 'High', 'Critical'];
   const sentiments = ['Positive', 'Negative', 'Neutral', 'Mixed'];
   const statuses = ['Active', 'Active', 'Monitoring'];
-  const stats = ['Flagged', 'Under Investigation', 'Verified Buzzer', 'Suspended'];
+  const accStatuses = ['Flagged', 'Under Investigation', 'Verified Buzzer', 'Suspended'];
 
-  scrapedCampaigns = Array.from({ length: 3 }, (_, i) => ({
-    id: `camp-${id}-${i}`,
-    title: `${keyword} Campaign ${i + 1}`,
-    description: `Organized disinformation campaign around "${keyword}" detected across social platforms.`,
-    topic: keyword,
-    platforms: [platforms[i % 3]],
-    intensity: intensity[i % 4],
-    sentiment: sentiments[i % 4],
-    startDate: new Date().toISOString().slice(0, 10),
-    status: statuses[i % 3],
-    botRatio: 0.5 + Math.random() * 0.45,
-    reach: Math.floor(50000 + Math.random() * 200000),
-    hashtags: [`#${keyword}`, `#${keyword}Now`, `#Dukung${keyword}`],
-    keyNarrative: `Coordinated amplification of "${keyword}" narrative using copypasta and hashtag spamming.`,
-    buzzerCount: Math.floor(10 + Math.random() * 90),
-  }));
+  const intensityConfig = [
+    { accounts: 5, posts: 8, reach: 50000 },
+    { accounts: 15, posts: 20, reach: 150000 },
+    { accounts: 35, posts: 45, reach: 400000 },
+    { accounts: 60, posts: 80, reach: 800000 },
+  ];
 
-  scrapedAccounts = Array.from({ length: 5 }, (_, i) => ({
-    id: `acc-${id}-${i}`,
-    username: `buzzer_${keyword}_${i}`,
-    displayName: `Buzzer ${keyword} #${i}`,
-    platform: platforms[i % 3],
-    followers: Math.floor(100 + Math.random() * 5000),
-    following: Math.floor(500 + Math.random() * 3000),
-    botScore: Math.floor(60 + Math.random() * 40),
-    status: stats[i % 4],
-    lastActive: new Date().toISOString(),
-    reason: `Suspected coordination in "${keyword}" disinformation network.`,
-    recentCopypastaCount: Math.floor(3 + Math.random() * 20),
-  }));
+  scrapedCampaigns = Array.from({ length: 3 }, (_, i) => {
+    const cfg = intensityConfig[i % 4];
+    return {
+      id: `camp-${id}-${i}`,
+      title: `${keyword} Campaign ${i + 1}`,
+      description: `Organized disinformation campaign around "${keyword}" detected across social platforms.`,
+      topic: keyword,
+      platforms: [platforms[i % 3]],
+      intensity: intensity[i % 4],
+      sentiment: sentiments[i % 4],
+      startDate: new Date().toISOString().slice(0, 10),
+      status: statuses[i % 3],
+      botRatio: 0.5 + Math.random() * 0.45,
+      reach: cfg.reach,
+      hashtags: [`#${keyword}`, `#${keyword}Now`, `#Dukung${keyword}`],
+      keyNarrative: `Coordinated amplification of "${keyword}" narrative using copypasta and hashtag spamming.`,
+      buzzerCount: cfg.accounts,
+    };
+  });
 
-  scrapedPosts = Array.from({ length: 8 }, (_, i) => ({
-    id: `post-${id}-${i}`,
-    platform: platforms[i % 3],
-    authorUsername: `user_${keyword}_${i}`,
-    text: `${keyword} is a trending topic! #${keyword} #viral ${i % 2 === 0 ? 'Dukung terus!' : 'Tolak!'}`,
-    postUrl: `https://${platforms[i % 3].toLowerCase()}.com/post/${id}-${i}`,
-    publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
-    likes: Math.floor(50 + Math.random() * 500),
-    comments: Math.floor(10 + Math.random() * 100),
-    shares: Math.floor(5 + Math.random() * 200),
-    reach: Math.floor(1000 + Math.random() * 10000),
-    engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
-  }));
+  let accIdCounter = 0;
+  scrapedAccounts = scrapedCampaigns.flatMap((camp, ci) => {
+    const cfg = intensityConfig[ci % 4];
+    return Array.from({ length: cfg.accounts }, (_, i) => {
+      const idx = accIdCounter++;
+      return {
+        id: `acc-${id}-${idx}`,
+        username: `buzzer_${keyword}_${idx}`,
+        displayName: `Buzzer ${keyword} #${idx}`,
+        platform: platforms[idx % 3],
+        followers: Math.floor(100 + Math.random() * 5000),
+        following: Math.floor(500 + Math.random() * 3000),
+        botScore: Math.floor(60 + Math.random() * 40),
+        status: accStatuses[idx % 4],
+        lastActive: new Date().toISOString(),
+        reason: `Suspected coordination in "${camp.title}" disinformation network.`,
+        recentCopypastaCount: Math.floor(3 + Math.random() * 20),
+        campaignId: camp.id,
+      };
+    });
+  });
+
+  let postIdCounter = 0;
+  scrapedPosts = scrapedCampaigns.flatMap((camp, ci) => {
+    const cfg = intensityConfig[ci % 4];
+    const templates = [
+      `${keyword} benar-benar membawa perubahan positif! #${keyword} #perubahan`,
+      `Saya sangat mendukung ${keyword}. #${keyword} #mendukung`,
+      `${keyword} adalah langkah maju yang cerdas. #${keyword} #maju`,
+      `${keyword} berhasil membuktikan diri. #${keyword} #sukses`,
+      `Senang sekali melihat perkembangan ${keyword}. #${keyword} #bangga`,
+      `${keyword} hanya gimmick belaka. #${keyword} #kecewa`,
+      `Saya curiga ${keyword} tidak seperti yang dikatakan. #${keyword} #curiga`,
+      `${keyword} gagal total. #${keyword} #gagal`,
+      `Stop ${keyword}, ini penipuan. #${keyword} #hoax`,
+      `${keyword} merusak kepercayaan publik. #${keyword} #rusak`,
+      `${keyword} sedang hangat diperbincangkan. #${keyword} #viral`,
+      `Ada yang bisa jelaskan tentang ${keyword}? #${keyword} #info`,
+      `${keyword} trending di mana-mana. #${keyword} #trending`,
+      `Apa pendapat kalian tentang ${keyword}? #${keyword} #opini`,
+      `${keyword} masuk berita utama hari ini. #${keyword} #berita`,
+    ];
+    return Array.from({ length: cfg.posts }, (_, i) => {
+      const idx = postIdCounter++;
+      return {
+        id: `post-${id}-${idx}`,
+        platform: platforms[idx % 3],
+        authorUsername: `user_${keyword}_${idx}`,
+        text: templates[i % templates.length],
+        postUrl: `https://${platforms[idx % 3].toLowerCase()}.com/post/${id}-${idx}`,
+        publishedAt: new Date(Date.now() - idx * 3600000).toISOString(),
+        likes: Math.floor(50 + Math.random() * 500),
+        comments: Math.floor(10 + Math.random() * 100),
+        shares: Math.floor(5 + Math.random() * 200),
+        reach: Math.floor(1000 + Math.random() * 10000),
+        engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+        campaignId: camp.id,
+      };
+    });
+  });
 
   scrapedTimeline = Array.from({ length: 14 }, (_, i) => {
     const d = new Date();
@@ -758,6 +801,38 @@ app.get("/api/proxy/models/gemini", async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: "Failed to proxy Gemini models" });
+  }
+});
+
+app.get("/api/proxy/models/opencode", async (req, res) => {
+  try {
+    const key = req.query.key;
+    const resp = await fetch('https://opencode.ai/zen/v1/models', {
+      headers: key ? { 'Authorization': `Bearer ${key}` } : {}
+    });
+    const data = await resp.json();
+    const models = (data.data || []).map((m: any) => ({ id: m.id, name: m.id }));
+    res.json({ models });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to proxy OpenCode models" });
+  }
+});
+
+app.post("/api/proxy/opencode/chat", async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    const resp = await fetch('https://opencode.ai/zen/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': auth || '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req.body)
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: "OpenCode proxy failed" });
   }
 });
 
@@ -965,8 +1040,8 @@ app.get("/api/network", (_req, res) => {
       const tagId = `tag-${tag.replace(/^#/, '').toLowerCase()}`;
       links.push({ source: c.id, target: tagId, value: 70 });
     });
-    // Campaign → Suspicious
-    scrapedAccounts.forEach(a => {
+    // Campaign → Suspicious (only accounts linked to this campaign)
+    scrapedAccounts.filter(a => a.campaignId === c.id).forEach(a => {
       links.push({ source: c.id, target: a.id, value: Math.floor(30 + Math.random() * 70) });
     });
   });
@@ -1086,6 +1161,7 @@ app.get("/api/trend/daily", async (_req, res) => {
   res.json({
     date: today,
     generatedAt: Date.now(),
+    location: 'Indonesia',
     platforms,
     totalPosts,
     dominantPlatform,
@@ -1111,6 +1187,56 @@ if (hasBuild) {
 
 const PORT = process.env.PORT || 3000;
 const API_PORT = process.env.API_PORT || 3001;
+
+// ----- AI Key Status Check -----
+app.post("/api/ai/check-status", async (req, res) => {
+  const { provider, key, model } = req.body;
+  if (!key) return res.json({ valid: false, reason: 'no_key' });
+
+  try {
+    if (provider === 'Gemini') {
+      const testModel = model || 'gemini-1.5-flash';
+      const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${key}`;
+      const resp = await fetch(testUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: 'test' }] }] })
+      });
+      const data = await resp.json();
+      if (data.error) {
+        const msg = (data.error.message || '').toLowerCase();
+        if (msg.includes('quota') || msg.includes('rate') || msg.includes('billing') || msg.includes('resource has been exhausted') || msg.includes('daily limit') || msg.includes('not enough')) {
+          return res.json({ valid: false, reason: 'exhausted' });
+        }
+        return res.json({ valid: false, reason: 'invalid' });
+      }
+      return res.json({ valid: true, reason: 'ok' });
+    } else if (provider === 'OpenRouter') {
+      const resp = await fetch('https://openrouter.ai/api/v1/auth/key', {
+        headers: { 'Authorization': `Bearer ${key}` }
+      });
+      if (resp.status === 401) return res.json({ valid: false, reason: 'invalid' });
+      const data = await resp.json();
+      if (data.error) {
+        const msg = (data.error.message || '').toLowerCase();
+        if (msg.includes('quota') || msg.includes('credit') || msg.includes('insufficient') || msg.includes('rate')) {
+          return res.json({ valid: false, reason: 'exhausted' });
+        }
+        return res.json({ valid: false, reason: 'invalid' });
+      }
+      return res.json({ valid: true, reason: 'ok' });
+    } else if (provider === 'Opencode') {
+      const resp = await fetch('https://opencode.ai/zen/v1/models', {
+        headers: { 'Authorization': `Bearer ${key}` }
+      });
+      if (resp.status === 401) return res.json({ valid: false, reason: 'invalid' });
+      return res.json({ valid: true, reason: 'ok' });
+    }
+    res.json({ valid: false, reason: 'unknown_provider' });
+  } catch {
+    res.json({ valid: false, reason: 'error' });
+  }
+});
 
 // ----- Global error handler -----
 app.use((err: any, _req: any, res: any, _next: any) => {

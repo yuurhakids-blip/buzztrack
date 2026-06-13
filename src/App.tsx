@@ -58,7 +58,7 @@ export default function App() {
         if (!data) return "Belum ada data tren yang cukup untuk analisis.";
         const { platforms, totalPosts, dominantPlatform, overallSentiment } = data;
         const platformNames = Object.keys(platforms || {}).join(', ');
-        return `Hari ini terpantau ${totalPosts || 0} postingan di ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
+        return `Hari ini terpantau ${totalPosts || 0} postingan di Indonesia dari ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
       };
 
       // Coba AI terlebih dahulu, jika gagal fallback ke heuristic
@@ -70,12 +70,12 @@ export default function App() {
           apiKey: localStorage.getItem(`api-key-${provider}`) || ''
         };
 
-        if (config.apiKey) {
+        if (config.apiKey && aiActive) {
           // Coba dapatkan insight dari AI
           const aiResult = await AIService.analyzeTrend(trendData, config);
           setTrendInsight(aiResult);
         } else {
-          // Tidak ada API key, langsung heuristic
+          // Tidak ada API key atau AI tidak aktif, langsung heuristic
           setTrendInsight({ insight: generateHeuristicInsight(trendData), mode: 'Heuristic' });
         }
       } catch (aiError) {
@@ -123,8 +123,8 @@ export default function App() {
         apiKey: localStorage.getItem(`api-key-${provider}`) || ''
       };
       
-      // Cek localStorage cache dulu dengan suffix v2 untuk invalidate cache lama
-      const cacheKey = `brief_${selectedCampaign.id}_v2`;
+      // Cek localStorage cache dengan kunci unik per kampanye DAN per platform (di sini kita gunakan selectedCampaign.platforms[0] jika ada)
+      const cacheKey = `brief_${selectedCampaign.id}_${selectedCampaign.platforms?.[0] || 'all'}_v2`;
       try {
         const cached = localStorage.getItem(cacheKey);
         if (cached) {
@@ -139,7 +139,7 @@ export default function App() {
       
       const generateBrief = async () => {
         try {
-          if (config.apiKey) {
+          if (config.apiKey && aiActive) {
             const prompt = `Buat ringkasan intelijen singkat (2-3 kalimat Bahasa Indonesia) untuk kampanye disinformasi ini:
 Judul: ${selectedCampaign.title}
 Platform: ${selectedCampaign.platforms?.join(', ')}
@@ -199,9 +199,39 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
 
   const [activeProvider, setActiveProvider] = useState<string>('Gemini');
   const [aiActive, setAiActive] = useState<boolean>(false);
+  const [aiTokenStatus, setAiTokenStatus] = useState<'active' | 'exhausted' | 'offline'>('offline');
   const [todayTrend, setTodayTrend] = useState<any[]>([]);
 
   const [activeModel, setActiveModel] = useState<string>('');
+
+  const checkAiKeyStatus = async (provider: string, key: string, model?: string) => {
+    if (!key) {
+      setAiActive(false);
+      setAiTokenStatus('offline');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/ai/check-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, key, model })
+      });
+      const data = await resp.json();
+      if (data.valid) {
+        setAiActive(true);
+        setAiTokenStatus('active');
+      } else if (data.reason === 'exhausted') {
+        setAiActive(false);
+        setAiTokenStatus('exhausted');
+      } else {
+        setAiActive(false);
+        setAiTokenStatus('offline');
+      }
+    } catch {
+      setAiActive(false);
+      setAiTokenStatus('offline');
+    }
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem('selectedProvider') || 'Gemini';
@@ -210,7 +240,44 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
     setActiveModel(savedModel);
     const key = localStorage.getItem(`api-key-${saved}`);
     setAiActive(!!key);
+    if (key) {
+      checkAiKeyStatus(saved, key, savedModel);
+    }
+    const statusInterval = setInterval(() => {
+      const p = localStorage.getItem('selectedProvider') || 'Gemini';
+      const m = localStorage.getItem('selectedModel') || '';
+      const k = localStorage.getItem(`api-key-${p}`);
+      if (k) checkAiKeyStatus(p, k, m);
+    }, 60000);
+    return () => clearInterval(statusInterval);
   }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      const p = localStorage.getItem('selectedProvider') || 'Gemini';
+      const m = localStorage.getItem('selectedModel') || '';
+      const k = localStorage.getItem(`api-key-${p}`);
+      setActiveProvider(p);
+      setActiveModel(m);
+      if (k) checkAiKeyStatus(p, k, m);
+      else { setAiActive(false); setAiTokenStatus('offline'); setActiveProvider(p); setActiveModel(m); }
+    };
+    window.addEventListener('ai-status-changed', handler);
+    return () => window.removeEventListener('ai-status-changed', handler);
+  }, []);
+
+  // Listen for tab changes to Settings — refresh status when coming back
+  useEffect(() => {
+    if (activeTab !== 'settings') {
+      const p = localStorage.getItem('selectedProvider') || 'Gemini';
+      const m = localStorage.getItem('selectedModel') || '';
+      const k = localStorage.getItem(`api-key-${p}`);
+      setActiveProvider(p);
+      setActiveModel(m);
+      if (k) checkAiKeyStatus(p, k, m);
+      else { setAiActive(false); setAiTokenStatus('offline'); }
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const fetchTodayTrend = async () => {
@@ -333,7 +400,12 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         apiKey: localStorage.getItem(`api-key-${provider}`) || ''
       };
       
-      const result = await AIService.predictRisk(campaign, todayTrend, config);
+      let result: { trend: string; insight: string; mode: 'AI' | 'Heuristic' };
+      if (config.apiKey && aiActive) {
+        result = await AIService.predictRisk(campaign, todayTrend, config);
+      } else {
+        result = { trend: 'stable', insight: 'Prediksi risiko tidak tersedia (AI nonaktif).', mode: 'Heuristic' };
+      }
       const insightText = `[MODE ${result.mode}] ${result.insight}`;
       setCampaigns(prev => prev.map(c => c.id === campaign.id ? { 
         ...c, 
@@ -496,6 +568,12 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         apiKey: localStorage.getItem(`api-key-${provider}`) || ''
       };
 
+      if (!config.apiKey || !aiActive) {
+        showNotification('error', 'AI tidak aktif. Periksa API Key di Pengaturan.');
+        setIsAnalyzing(false);
+        return;
+      }
+
       const data = await AIService.analyze(analyzeContent, config);
       setAnalysisResult(data);
       showNotification('success', `Analisis selesai: ${data.verdict}`);
@@ -597,7 +675,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
       )}
 
       {/* Header (Top Navigation & Clearances) */}
-      <header className="bg-[#0A0A0B] border-b border-[#2A2A2E] px-4 sm:px-6 lg:px-12 py-3 sm:py-4 flex items-center justify-between z-10 sticky top-0" id="global-header">
+      <header className="bg-[#0A0A0B] border-b border-[#2A2A2E] px-1 sm:px-2 lg:px-4 py-3 sm:py-4 flex items-center justify-between z-10 sticky top-0" id="global-header">
         <div className="flex items-center gap-3 sm:gap-4">
           {/* EchoWatch Styled Golden Hex Logo */}
           <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-[#D4AF37] to-[#8A6D3B] rounded-lg flex items-center justify-center text-black font-extrabold text-lg sm:text-xl shadow-lg shadow-[#D4AF37]/10 select-none">
@@ -615,7 +693,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         </div>
 
         {/* Desktop Custom Nav Link Tabs */}
-        <nav className="hidden lg:flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A0A0A5]">
+        <nav className="hidden lg:flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A0A0A5] ml-6">
           {[ 
             { id: 'campaigns', label: 'Intel Kampanye', icon: Radio },
             { id: 'accounts', label: 'Profil Entitas', icon: UserX },
@@ -1509,22 +1587,27 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               insight={trendInsight.insight} 
               insightMode={trendInsight.mode} 
               isTrendLoading={isTrendLoading} 
+              onHashtagClick={(tag) => {
+                setSearchKeywordInput(tag);
+                handleKeywordSearch();
+              }}
             />
           )}
 
           {/* TAB 4: Sentiment Analysis */}
-          {activeTab === 'sentiment' && (
+          <div className={activeTab === 'sentiment' ? '' : 'hidden'}>
             <Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500 font-mono text-sm border border-slate-800 rounded-xl p-8">Memuat Analisis Sentimen...</div>}>
               <SentimentAnalysis 
                 showNotification={showNotification}
                 aiConfig={{
-                  provider: (localStorage.getItem('selectedProvider') as any) || 'Gemini',
-                  model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
-                  apiKey: localStorage.getItem(`api-key-${localStorage.getItem('selectedProvider') || 'Gemini'}`) || ''
+                  provider: activeProvider,
+                  model: activeModel,
+                  apiKey: localStorage.getItem(`api-key-${activeProvider}`) || ''
                 }}
+                aiActive={aiActive}
               />
             </Suspense>
-          )}
+          </div>
 
           {/* TAB 5: Gemini-powered Analyzer Playground */}
           {activeTab === 'analyzer' && (
@@ -1954,10 +2037,20 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
 
       {/* Fixed AI Status Indicator at Bottom Right */}
       <div className="fixed bottom-4 right-4 z-50">
-        <div className={`px-4 py-2 rounded-xl shadow-lg border transition-all duration-300 flex items-center gap-2 ${aiActive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-slate-900 border-slate-700 text-slate-400'}`}>
-          <span className={`w-2.5 h-2.5 rounded-full ${aiActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`}></span>
+        <div className={`px-4 py-2 rounded-xl shadow-lg border transition-all duration-300 flex items-center gap-2 ${
+          aiTokenStatus === 'active' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+          aiTokenStatus === 'exhausted' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
+          'bg-slate-900 border-slate-700 text-slate-400'
+        }`}>
+          <span className={`w-2.5 h-2.5 rounded-full ${
+            aiTokenStatus === 'active' ? 'bg-emerald-400 animate-pulse' :
+            aiTokenStatus === 'exhausted' ? 'bg-red-400' :
+            'bg-slate-600'
+          }`}></span>
           <span className="text-[11px] font-mono font-bold uppercase tracking-wider">
-            {aiActive ? `AI ${activeProvider} Aktif` : 'AI Offline'}
+            {aiTokenStatus === 'active' ? `AI ${activeProvider} Aktif` :
+             aiTokenStatus === 'exhausted' ? 'AI Tidak Aktif - Token Habis' :
+             'AI Offline'}
           </span>
         </div>
       </div>

@@ -104,7 +104,7 @@ export default function SocialAnalyticsDashboard({ showNotification, reloadTrigg
   const sortedPosts = [...filteredPosts]
     .filter(p => matchesDateRange(p.publishedAt))
     .sort((a, b) => (b.likes + b.comments + b.shares) - (a.likes + a.comments + a.shares));
-  const topPosts = sortedPosts.slice(0, showAllTopPosts ? 15 : 5);
+  const topPosts = showAllTopPosts ? sortedPosts : sortedPosts.slice(0, 5);
   const hasMorePosts = sortedPosts.length > 5;
 
   // --- Perbandingan Platform ---

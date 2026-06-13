@@ -6,16 +6,17 @@ interface SettingsProps {
 }
 
 export default function Settings({ showNotification }: SettingsProps) {
-  const [provider, setProvider] = useState<'Gemini' | 'OpenRouter'>(() => 
+  const [provider, setProvider] = useState<'Gemini' | 'OpenRouter' | 'Opencode'>(() => 
     (localStorage.getItem('selectedProvider') as any) || 'Gemini'
   );
   const [model, setModel] = useState<string>(() => 
     localStorage.getItem('selectedModel') || ''
   );
   const [models, setModels] = useState<string[]>([]);
-  const [apiKeys, setApiKeys] = useState<{ Gemini: string; OpenRouter: string }>(() => ({
+  const [apiKeys, setApiKeys] = useState<{ Gemini: string; OpenRouter: string; Opencode: string }>(() => ({
     Gemini: localStorage.getItem('api-key-Gemini') || '',
     OpenRouter: localStorage.getItem('api-key-OpenRouter') || '',
+    Opencode: localStorage.getItem('api-key-Opencode') || '',
   }));
 
   const [modelSearch, setModelSearch] = useState<string>('');
@@ -27,8 +28,8 @@ export default function Settings({ showNotification }: SettingsProps) {
       setIsFetchingModels(true);
       let available: string[] = [];
       try {
-        // Mengarahkan request ke endpoint internal backend agar melewati CSP
-        const resp = await fetch(provider === 'OpenRouter' ? '/api/proxy/models/openrouter' : `/api/proxy/models/gemini?key=${apiKeys.Gemini}`);
+        const modelUrl = provider === 'OpenRouter' ? '/api/proxy/models/openrouter' : provider === 'Gemini' ? `/api/proxy/models/gemini?key=${apiKeys.Gemini}` : `/api/proxy/models/opencode?key=${apiKeys.Opencode}`;
+        const resp = await fetch(modelUrl);
         const data = await resp.json();
         
         if (provider === 'OpenRouter') {
@@ -40,6 +41,10 @@ export default function Settings({ showNotification }: SettingsProps) {
                 return aFree === bFree ? 0 : aFree ? -1 : 1;
               })
               .map((m: any) => m.id);
+          }
+        } else if (provider === 'Opencode') {
+          if (data.models) {
+            available = data.models.map((m: any) => m.id);
           }
         } else {
           if (data.models) {
@@ -54,7 +59,8 @@ export default function Settings({ showNotification }: SettingsProps) {
       // ... sisa fallback
       if (available.length === 0) {
         if (provider === 'Gemini') available = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini/gemini-3.1-flash-lite-preview'];
-        else if (provider === 'OpenRouter') available = ['google/gemini-2.0-flash-exp:free', 'meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-7b-instruct:free'];
+        else if (provider === 'OpenRouter') available = ['google/gemini-2.0-flash-exp:free', 'deepseek/deepseek-v4-flash:free', 'meta-llama/llama-3.2-3b-instruct:free', 'mistralai/mistral-7b-instruct:free'];
+        else if (provider === 'Opencode') available = ['deepseek-v4-flash', 'deepseek-v4-flash-free', 'gemini-3.5-flash', 'gemini-3.1-pro', 'claude-sonnet-4', 'gpt-5.4-mini'];
       }
       
       setModels(available);
@@ -62,7 +68,7 @@ export default function Settings({ showNotification }: SettingsProps) {
       setIsFetchingModels(false);
     };
     fetchModels();
-  }, [provider, apiKeys.Gemini]);
+  }, [provider, apiKeys.Gemini, apiKeys.Opencode]);
 
   const filteredModels = models.filter(m => m.toLowerCase().includes(modelSearch.toLowerCase()));
 
@@ -71,7 +77,9 @@ export default function Settings({ showNotification }: SettingsProps) {
     localStorage.setItem('selectedModel', model);
     localStorage.setItem('api-key-Gemini', apiKeys.Gemini);
     localStorage.setItem('api-key-OpenRouter', apiKeys.OpenRouter);
+    localStorage.setItem('api-key-Opencode', apiKeys.Opencode);
     showNotification('success', 'Konfigurasi berhasil disimpan!');
+    window.dispatchEvent(new CustomEvent('ai-status-changed'));
   };
 
   return (
@@ -94,6 +102,7 @@ export default function Settings({ showNotification }: SettingsProps) {
           >
             <option value="Gemini">Gemini</option>
             <option value="OpenRouter">OpenRouter</option>
+            <option value="Opencode">Opencode</option>
           </select>
         </div>
 
