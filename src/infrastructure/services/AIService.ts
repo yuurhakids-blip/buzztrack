@@ -34,7 +34,6 @@ export class AIService {
     
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const result = await response.json();
-    // Jika token habis atau error, fallback
     if (result.error) throw new Error(result.error.message || 'Gemini API error');
     const text = result.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
     return this.parseAIResponse(text, model, 'Gemini');
@@ -52,7 +51,6 @@ export class AIService {
     
     const response = await fetch(url, { method: 'POST', headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://buzztrack.ai', 'X-Title': 'BuzzTrack AI' }, body: JSON.stringify(payload) });
     const result = await response.json();
-    // Jika token habis atau error, fallback
     if (result.error) throw new Error(result.error.message || 'OpenRouter API error');
     const text = result.choices?.[0]?.message?.content || '{}';
     return this.parseAIResponse(text, model, 'OpenRouter');
@@ -117,13 +115,11 @@ export class AIService {
   }
 
   static async generateEvidence(posts: any[], config: AIConfig, context?: string): Promise<{ summary: string, mode: 'AI' | 'Heuristic' }> {
-    // Buat cache key yang lebih unik dengan context (jika ada) dan preview konten
     const contentPreview = posts.slice(0, 3).map(p => (p.text || '').substring(0, 50)).join('|');
     const cacheKey = AICache.generateKey('evidence', `${contentPreview}_${config.model}_${context || ''}`);
     const cached = AICache.get<{ summary: string, mode: 'AI' | 'Heuristic' }>(cacheKey);
     if (cached) return cached;
 
-    // Cek apakah posts adalah ringkasan kampanye (bukan postingan asli)
     const isCampaignSummary = posts.length === 1 && posts[0]?.text?.includes('Judul:');
     
     const { provider, model, apiKey } = config;
@@ -138,10 +134,8 @@ export class AIService {
       AICache.set(cacheKey, result);
       return result;
     } catch (e) {
-      // Heuristic yang lebih informatif, tergantung apakah ini ringkasan kampanye atau postingan
       let heuristicSummary = "";
       if (isCampaignSummary && posts[0]?.text) {
-        // Ekstrak informasi dari ringkasan kampanye
         const text = posts[0].text;
         const judulMatch = text.match(/Judul: (.+)/);
         const platformMatch = text.match(/Platform: (.+)/);
@@ -211,7 +205,6 @@ export class AIService {
     const cached = AICache.get<{ insight: string }>(cacheKey);
     if (cached) return { ...cached, mode: 'AI' };
 
-    // Fallback heuristic terlebih dahulu jika tidak ada API key atau token habis
     const generateHeuristicInsight = (data: any) => {
       if (!data) return "[MODE HEURISTIK] Belum ada data tren yang cukup untuk analisis.";
       const { platforms, totalPosts, dominantPlatform, overallSentiment } = data;
@@ -219,7 +212,6 @@ export class AIService {
       return `[MODE HEURISTIK] Hari ini terpantau ${totalPosts || 0} postingan di ${platformNames || 'beberapa platform'}, dengan dominasi di ${dominantPlatform || 'platform utama'} dan sentimen keseluruhan ${overallSentiment || 'netral'}.`;
     };
 
-    // Jika tidak ada API key, langsung fallback
     if (!apiKey) {
       return { insight: generateHeuristicInsight(trendData), mode: 'Heuristic' };
     }
@@ -329,6 +321,69 @@ export class AIService {
       return result;
     } catch {
       const result = generateHeuristicSentiment();
+      AICache.set(cacheKey, result);
+      return result;
+    }
+  }
+
+  static async analyzePostSentimentsBatch(posts: { id: string; text: string }[], config: AIConfig): Promise<{ postSentiments: { postId: string; sentiment: 'Positif' | 'Negatif' | 'Netral'; score: number }[]; mode: 'AI' | 'Heuristic' }> {
+    const contentPreview = posts.slice(0, 5).map(p => (p.text || '').substring(0, 30)).join('|');
+    const cacheKey = AICache.generateKey('sentiment_batch', `${contentPreview}_${config.model}_${posts.length}`);
+    const cached = AICache.get<{ postSentiments: { postId: string; sentiment: 'Positif' | 'Negatif' | 'Netral'; score: number }[]; mode: 'AI' | 'Heuristic' }>(cacheKey);
+    if (cached) return cached;
+
+    const { provider, model, apiKey } = config;
+
+    const generateHeuristic = () => {
+      const positiveWords = ['bagus', 'hebat', 'sukses', 'menyenangkan', 'terbaik', 'luar biasa', 'cinta', 'bangga', 'positif', 'baik', 'senang', 'dukung', 'keren', 'salut', 'maju', 'cerdas', 'indah', 'bermanfaat', 'berhasil', 'inovatif', 'pintar'];
+      const negativeWords = ['buruk', 'jelek', 'gagal', 'menyedihkan', 'terburuk', 'mengecewakan', 'benci', 'kecewa', 'negatif', 'penipuan', 'hoax', 'jahat', 'bohong', 'tolak', 'korupsi', 'rusak', 'salah', 'curang', 'parah', 'ancam', 'krisis', 'provokasi'];
+      const postSentiments = posts.map(p => {
+        const lower = (p.text || '').toLowerCase();
+        let posCount = 0;
+        let negCount = 0;
+        positiveWords.forEach(w => {
+          const re = new RegExp(w.replace(/\s+/g, '\\s+'), 'gi');
+          posCount += (lower.match(re) || []).length;
+        });
+        negativeWords.forEach(w => {
+          const re = new RegExp(w.replace(/\s+/g, '\\s+'), 'gi');
+          negCount += (lower.match(re) || []).length;
+        });
+        const total = posCount + negCount;
+        if (total === 0) return { postId: p.id, sentiment: 'Netral' as const, score: 50 };
+        if (posCount > negCount) return { postId: p.id, sentiment: 'Positif' as const, score: Math.round(50 + (posCount / total) * 50) };
+        if (negCount > posCount) return { postId: p.id, sentiment: 'Negatif' as const, score: Math.round(50 - (negCount / total) * 50) };
+        return { postId: p.id, sentiment: 'Netral' as const, score: 50 };
+      });
+      return { postSentiments, mode: 'Heuristic' as const };
+    };
+
+    if (!apiKey) {
+      const result = generateHeuristic();
+      AICache.set(cacheKey, result);
+      return result;
+    }
+
+    const postsJson = JSON.stringify(posts.map(p => ({ id: p.id, text: p.text })).slice(0, 30));
+    const prompt = `Analisis sentimen setiap postingan berikut satu per satu. Postingan: ${postsJson}.
+    Berikan jawaban dalam format JSON ARRAY (Bahasa Indonesia) dengan struktur: [{ "postId": "id_postingan", "sentiment": "Positif" | "Negatif" | "Netral", "score": 0-100 }].
+    Penting: output HARUS array JSON, bukan objek.`;
+
+    try {
+      const resp = await (provider === 'Gemini' ? this.callGeminiRaw(prompt, model, apiKey) : this.callOpenRouterRaw(prompt, model, apiKey));
+      const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      const arr = Array.isArray(parsed) ? parsed : (parsed.postSentiments || parsed.results || []);
+      const postSentiments = arr.map((item: any) => ({
+        postId: item.postId || item.id || '',
+        sentiment: (['Positif', 'Negatif', 'Netral'].includes(item.sentiment) ? item.sentiment : 'Netral') as 'Positif' | 'Negatif' | 'Netral',
+        score: typeof item.score === 'number' ? Math.max(0, Math.min(100, item.score)) : 50
+      }));
+      const result = { postSentiments, mode: 'AI' as const };
+      AICache.set(cacheKey, result);
+      return result;
+    } catch {
+      const result = generateHeuristic();
       AICache.set(cacheKey, result);
       return result;
     }

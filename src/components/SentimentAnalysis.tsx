@@ -29,7 +29,8 @@ import {
   Hash,
   Share2,
   ThumbsUp,
-  ThumbsDown
+  ThumbsDown,
+  ExternalLink
 } from 'lucide-react';
 import { AIService } from '../infrastructure/services/AIService';
 import { api } from '../api';
@@ -45,87 +46,63 @@ interface SentimentData {
 interface PostData {
   id: string;
   text: string;
-  author: string;
+  authorUsername: string;
   platform: string;
   date: string;
   likes: number;
   comments: number;
   shares: number;
+  reach: number;
+  engagementRate: number;
+  postUrl: string;
   sentiment: 'Positif' | 'Negatif' | 'Netral';
   sentimentScore: number;
 }
 
 const COLORS = ['#D4AF37', '#8A6D3B', '#4A4A6A'];
 
-const generateMockPosts = (topic: string): PostData[] => {
-  const basePosts = [
-    `Saya sangat setuju dengan ${topic}, ini adalah langkah yang bagus!`,
-    `${topic} adalah hal terburuk yang pernah ada, saya kecewa!`,
-    `Saya netral tentang ${topic}, masih banyak yang harus dipelajari`,
-    `Wow, ${topic} benar-benar mengubah hidup saya menjadi lebih baik!`,
-    `Saya tidak suka dengan ${topic}, terlalu banyak masalah`,
-    `${topic} cukup bagus tapi masih perlu banyak perbaikan`,
-    `Terima kasih untuk semua yang terlibat dalam ${topic}!`,
-    `Saya sangat frustrasi dengan ${topic}, butuh perubahan cepat`,
-    `${topic} menarik, saya ingin tahu lebih banyak lagi`,
-    `Saya ragu dengan ${topic}, tapi saya akan tunggu dan lihat`,
-    `Inovasi luar biasa dalam ${topic}, sangat menginspirasi!`,
-    `Saya tidak mendukung ${topic} sama sekali`,
-    `${topic} memiliki potensi besar untuk masa depan`,
-    `Saya merasa ${topic} tidak sesuai dengan harapan saya`,
-    `Bagus sekali ${topic}, saya sangat merekomendasikannya!`,
-    `Saya khawatir tentang dampak dari ${topic}`,
-    `${topic} adalah solusi yang kita butuhkan saat ini`,
-    `Saya merasa ada yang kurang dengan ${topic}`,
-    `Luar biasa ${topic}, melebihi ekspektasi saya!`,
-    `Saya tidak yakin tentang ${topic}`
-  ];
+const POSITIVE_WORDS = ['bagus', 'hebat', 'sukses', 'menyenangkan', 'terbaik', 'luar biasa', 'cinta', 'bangga', 'positif', 'baik', 'senang', 'dukung', 'keren', 'salut', 'maju', 'cerdas', 'indah', 'bermanfaat', 'berhasil', 'inovatif', 'transparan', 'adil', 'bersih', 'pintar'];
+const NEGATIVE_WORDS = ['buruk', 'jelek', 'gagal', 'menyedihkan', 'terburuk', 'mengecewakan', 'benci', 'kecewa', 'negatif', 'penipuan', 'hoax', 'jahat', 'bohong', 'tolak', 'korupsi', 'rusak', 'salah', 'curang', 'bodoh', 'parah', 'ancam', 'krisis', 'darurat', 'provokasi'];
 
-  const platforms = ['X', 'TikTok', 'YouTube'];
-  const authors = ['@anakmuda', '@pemikirbebas', '@pengamatpolitik', '@teknologikita', '@warganet_2024', '@cerita_harian', '@analis_sosial', '@trending_id', '@berita_terkini', '@publik_voice'];
+function analyzePostSentiment(text: string): { sentiment: 'Positif' | 'Negatif' | 'Netral'; score: number } {
+  const lower = text.toLowerCase();
+  let posCount = 0;
+  let negCount = 0;
 
-  return basePosts.map((text, idx) => {
-    const sentimentScore = Math.random() * 100;
-    let sentiment: 'Positif' | 'Negatif' | 'Netral';
-    if (sentimentScore > 60) sentiment = 'Positif';
-    else if (sentimentScore < 40) sentiment = 'Negatif';
-    else sentiment = 'Netral';
-
-    const date = new Date();
-    date.setDate(date.getDate() - Math.floor(Math.random() * 7));
-
-    return {
-      id: `post-${idx}`,
-      text,
-      author: authors[Math.floor(Math.random() * authors.length)],
-      platform: platforms[Math.floor(Math.random() * platforms.length)],
-      date: date.toISOString().split('T')[0],
-      likes: Math.floor(Math.random() * 5000),
-      comments: Math.floor(Math.random() * 500),
-      shares: Math.floor(Math.random() * 1000),
-      sentiment,
-      sentimentScore
-    };
+  POSITIVE_WORDS.forEach(word => {
+    const regex = new RegExp(word.replace(/\s+/g, '\\s+'), 'gi');
+    posCount += (lower.match(regex) || []).length;
   });
-};
+  NEGATIVE_WORDS.forEach(word => {
+    const regex = new RegExp(word.replace(/\s+/g, '\\s+'), 'gi');
+    negCount += (lower.match(regex) || []).length;
+  });
+
+  const total = posCount + negCount;
+  if (total === 0) return { sentiment: 'Netral', score: 50 };
+
+  if (posCount > negCount) {
+    const score = Math.round(50 + (posCount / total) * 50);
+    return { sentiment: 'Positif', score };
+  } else if (negCount > posCount) {
+    const score = Math.round(50 - (negCount / total) * 50);
+    return { sentiment: 'Negatif', score };
+  }
+  return { sentiment: 'Netral', score: 50 };
+}
 
 export default function SentimentAnalysis({
-  showNotification
+  showNotification,
+  aiConfig
 }: {
   showNotification: (type: 'success' | 'error', text: string) => void;
+  aiConfig: { provider: string; model: string; apiKey: string };
 }) {
   const [topic, setTopic] = useState('');
   const [loading, setLoading] = useState(false);
   const [sentimentData, setSentimentData] = useState<SentimentData | null>(null);
   const [posts, setPosts] = useState<PostData[]>([]);
   const [selectedPlatform, setSelectedPlatform] = useState<string>('All');
-  const [dateRange, setDateRange] = useState<string>('7days');
-
-  const aiConfig = {
-    provider: (localStorage.getItem('selectedProvider') as any) || 'Gemini',
-    model: localStorage.getItem('selectedModel') || 'gemini-1.5-flash',
-    apiKey: localStorage.getItem(`api-key-${localStorage.getItem('selectedProvider') || 'Gemini'}`) || ''
-  };
 
   const handleAnalyze = async () => {
     if (!topic.trim()) {
@@ -135,28 +112,109 @@ export default function SentimentAnalysis({
 
     setLoading(true);
     try {
-      // Step 1: Try to scrape real data (or use mock data if no scrapers)
       let scrapedPosts: PostData[] = [];
+
       try {
-        // Try to get existing scraped posts
-        const response = await fetch('/api/trend/daily');
-        if (response.ok) {
-          // For now, generate mock data since we don't have real scraper integration
-          scrapedPosts = generateMockPosts(topic);
-        } else {
-          scrapedPosts = generateMockPosts(topic);
-        }
-      } catch (e) {
-        scrapedPosts = generateMockPosts(topic);
+        await api.social.search(topic.trim());
+      } catch { /* search may fail silently */ }
+
+      try {
+        const postsData = await api.social.posts.list();
+        scrapedPosts = postsData
+          .filter(p => p.text.toLowerCase().includes(topic.toLowerCase()))
+          .map(p => {
+            const { sentiment, score } = analyzePostSentiment(p.text);
+            return {
+              id: p.id,
+              text: p.text,
+              authorUsername: p.authorUsername,
+              platform: p.platform,
+              date: p.publishedAt.split('T')[0],
+              likes: p.likes,
+              comments: p.comments,
+              shares: p.shares,
+              reach: p.reach,
+              engagementRate: p.engagementRate,
+              postUrl: p.postUrl,
+              sentiment,
+              sentimentScore: score
+            };
+          });
+      } catch { /* fallback to empty */ }
+
+      if (scrapedPosts.length === 0) {
+        try {
+          const postsData = await api.social.posts.list();
+          scrapedPosts = postsData.map(p => {
+            const { sentiment, score } = analyzePostSentiment(p.text);
+            return {
+              id: p.id,
+              text: p.text,
+              authorUsername: p.authorUsername,
+              platform: p.platform,
+              date: p.publishedAt.split('T')[0],
+              likes: p.likes,
+              comments: p.comments,
+              shares: p.shares,
+              reach: p.reach,
+              engagementRate: p.engagementRate,
+              postUrl: p.postUrl,
+              sentiment,
+              sentimentScore: score
+            };
+          });
+        } catch { /* no data at all */ }
+      }
+
+      if (scrapedPosts.length === 0) {
+        showNotification('error', 'Belum ada data postingan. Jalankan pencarian di tab Analitik Sosial terlebih dahulu.');
+        setLoading(false);
+        return;
       }
 
       setPosts(scrapedPosts);
 
-      // Step 2: Analyze sentiment with AI or heuristic
-      const analysisResult = await AIService.analyzeSentiment(topic, scrapedPosts, aiConfig);
-      setSentimentData(analysisResult);
-      
-      showNotification('success', 'Analisis sentimen berhasil!');
+      const batchResult = await AIService.analyzePostSentimentsBatch(
+        scrapedPosts.map(p => ({ id: p.id, text: p.text })),
+        aiConfig as any
+      );
+
+      if (batchResult.postSentiments.length > 0) {
+        const sentimentMap = new Map(batchResult.postSentiments.map(s => [s.postId, s]));
+        scrapedPosts = scrapedPosts.map(p => {
+          const match = sentimentMap.get(p.id);
+          if (match) {
+            return { ...p, sentiment: match.sentiment, sentimentScore: match.score };
+          }
+          return p;
+        });
+        setPosts(scrapedPosts);
+      }
+
+      const positif = scrapedPosts.filter(p => p.sentiment === 'Positif').length;
+      const negatif = scrapedPosts.filter(p => p.sentiment === 'Negatif').length;
+      const netral = scrapedPosts.filter(p => p.sentiment === 'Netral').length;
+      const total = scrapedPosts.length;
+      let dominantSentiment: 'Positif' | 'Negatif' | 'Netral' = 'Netral';
+      let dominantScore = 50;
+      if (positif > negatif && positif > netral) {
+        dominantSentiment = 'Positif';
+        dominantScore = total > 0 ? Math.round((positif / total) * 100) : 50;
+      } else if (negatif > positif && negatif > netral) {
+        dominantSentiment = 'Negatif';
+        dominantScore = total > 0 ? Math.round((negatif / total) * 100) : 50;
+      } else {
+        dominantSentiment = 'Netral';
+        dominantScore = total > 0 ? Math.round((netral / total) * 100) : 50;
+      }
+      const keywords = scrapedPosts
+        .flatMap(p => p.text.match(/#\w+/g) || [])
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .slice(0, 5);
+      const summary = `[MODE ${batchResult.mode}] Dari ${total} postingan yang dianalisis, sentimen ${dominantSentiment.toLowerCase()} mendominasi (${dominantScore}% dari total). ${positif} positif, ${negatif} negatif, ${netral} netral.`;
+      setSentimentData({ sentiment: dominantSentiment, score: dominantScore, summary, keywords, mode: batchResult.mode });
+
+      showNotification('success', `Analisis sentimen selesai! ${scrapedPosts.length} postingan dianalisis.`);
     } catch (err) {
       showNotification('error', 'Gagal melakukan analisis');
     } finally {
@@ -164,7 +222,6 @@ export default function SentimentAnalysis({
     }
   };
 
-  // Calculate stats from posts
   const getSentimentStats = () => {
     const filtered = posts.filter(p => selectedPlatform === 'All' || p.platform === selectedPlatform);
     const positif = filtered.filter(p => p.sentiment === 'Positif').length;
@@ -181,8 +238,8 @@ export default function SentimentAnalysis({
     const platforms = ['X', 'TikTok', 'YouTube'];
     return platforms.map(p => {
       const pPosts = posts.filter(post => post.platform === p);
-      const avgSentiment = pPosts.length > 0 
-        ? pPosts.reduce((sum, p) => sum + p.sentimentScore, 0) / pPosts.length 
+      const avgSentiment = pPosts.length > 0
+        ? pPosts.reduce((sum, p) => sum + p.sentimentScore, 0) / pPosts.length
         : 0;
       return {
         name: p,
@@ -215,8 +272,8 @@ export default function SentimentAnalysis({
   const trendData = getTrendData();
 
   const totalPosts = posts.length;
-  const avgEngagement = posts.length > 0 
-    ? Math.round(posts.reduce((sum, p) => sum + p.likes + p.comments + p.shares, 0) / posts.length) 
+  const avgEngagement = posts.length > 0
+    ? Math.round(posts.reduce((sum, p) => sum + p.likes + p.comments + p.shares, 0) / posts.length)
     : 0;
   const totalReach = posts.reduce((sum, p) => sum + p.likes * 10 + p.comments * 5 + p.shares * 20, 0);
 
@@ -235,8 +292,8 @@ export default function SentimentAnalysis({
         <div className="flex items-center gap-3">
           {sentimentData && (
             <span className={`text-[10px] font-mono px-3 py-1.5 rounded-full ${
-              sentimentData.mode === 'AI' 
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' 
+              sentimentData.mode === 'AI'
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
                 : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
             }`}>
               Mode: {sentimentData.mode}
@@ -269,15 +326,15 @@ export default function SentimentAnalysis({
               Filter Platform
             </label>
             <select
-                        value={selectedPlatform}
-                        onChange={(e) => setSelectedPlatform(e.target.value)}
-                        className="w-full bg-[#0F0F12] border border-[#2A2A2E] rounded-xl px-4 py-4 text-sm text-slate-200 focus:outline-none focus:border-[#D4AF37]/50 transition"
-                      >
-                        <option value="All">Semua Platform</option>
-                        <option value="X">X</option>
-                        <option value="TikTok">TikTok</option>
-                        <option value="YouTube">YouTube</option>
-                      </select>
+              value={selectedPlatform}
+              onChange={(e) => setSelectedPlatform(e.target.value)}
+              className="w-full bg-[#0F0F12] border border-[#2A2A2E] rounded-xl px-4 py-4 text-sm text-slate-200 focus:outline-none focus:border-[#D4AF37]/50 transition"
+            >
+              <option value="All">Semua Platform</option>
+              <option value="X">X</option>
+              <option value="TikTok">TikTok</option>
+              <option value="YouTube">YouTube</option>
+            </select>
           </div>
           <div className="flex flex-col justify-end">
             <button
@@ -419,7 +476,7 @@ export default function SentimentAnalysis({
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{ backgroundColor: '#15151A', border: '1px solid #2A2A2E', borderRadius: '8px' }}
                     itemStyle={{ color: '#F5F5F5' }}
                   />
@@ -438,7 +495,7 @@ export default function SentimentAnalysis({
                   <CartesianGrid strokeDasharray="3 3" stroke="#2A2A2E" />
                   <XAxis dataKey="name" stroke="#66666E" fontSize={10} tickLine={false} axisLine={false} />
                   <YAxis stroke="#66666E" fontSize={10} tickLine={false} axisLine={false} />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{ backgroundColor: '#15151A', border: '1px solid #2A2A2E', borderRadius: '8px' }}
                     itemStyle={{ color: '#F5F5F5' }}
                   />
@@ -459,7 +516,7 @@ export default function SentimentAnalysis({
                 <CartesianGrid strokeDasharray="3 3" stroke="#2A2A2E" />
                 <XAxis dataKey="date" stroke="#66666E" fontSize={10} tickLine={false} axisLine={false} />
                 <YAxis stroke="#66666E" fontSize={10} tickLine={false} axisLine={false} />
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ backgroundColor: '#15151A', border: '1px solid #2A2A2E', borderRadius: '8px' }}
                   itemStyle={{ color: '#F5F5F5' }}
                 />
@@ -491,19 +548,32 @@ export default function SentimentAnalysis({
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-3">
                       <span className="text-xs font-mono text-slate-400">{post.platform}</span>
-                      <span className="text-xs font-mono text-[#D4AF37]">{post.author}</span>
+                      <span className="text-xs font-mono text-[#D4AF37]">@{post.authorUsername}</span>
                       <span className="text-[10px] font-mono text-slate-500">{post.date}</span>
                     </div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono flex items-center gap-1 ${
-                      post.sentiment === 'Positif' ? 'bg-emerald-500/10 text-emerald-400' :
-                      post.sentiment === 'Negatif' ? 'bg-red-500/10 text-red-400' :
-                      'bg-violet-500/10 text-violet-400'
-                    }`}>
-                      {post.sentiment === 'Positif' ? <ThumbsUp className="w-3 h-3" /> :
-                       post.sentiment === 'Negatif' ? <ThumbsDown className="w-3 h-3" /> :
-                       <Minus className="w-3 h-3" />}
-                      {post.sentiment}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {post.postUrl && (
+                        <a
+                          href={post.postUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-slate-500 hover:text-[#D4AF37] transition"
+                          title="Buka sumber asli"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono flex items-center gap-1 ${
+                        post.sentiment === 'Positif' ? 'bg-emerald-500/10 text-emerald-400' :
+                        post.sentiment === 'Negatif' ? 'bg-red-500/10 text-red-400' :
+                        'bg-violet-500/10 text-violet-400'
+                      }`}>
+                        {post.sentiment === 'Positif' ? <ThumbsUp className="w-3 h-3" /> :
+                         post.sentiment === 'Negatif' ? <ThumbsDown className="w-3 h-3" /> :
+                         <Minus className="w-3 h-3" />}
+                        {post.sentiment}
+                      </span>
+                    </div>
                   </div>
                   <p className="text-sm text-slate-300 mb-3 leading-relaxed">{post.text}</p>
                   <div className="flex items-center gap-4 text-[10px] font-mono text-slate-500">

@@ -123,8 +123,8 @@ export default function App() {
         apiKey: localStorage.getItem(`api-key-${provider}`) || ''
       };
       
-      // Cek localStorage cache dulu dengan suffix v2 untuk invalidate cache lama
-      const cacheKey = `brief_${selectedCampaign.id}_v2`;
+      // Cek localStorage cache dengan kunci unik per kampanye DAN per platform (di sini kita gunakan selectedCampaign.platforms[0] jika ada)
+      const cacheKey = `brief_${selectedCampaign.id}_${selectedCampaign.platforms?.[0] || 'all'}_v2`;
       try {
         const cached = localStorage.getItem(cacheKey);
         if (cached) {
@@ -597,7 +597,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
       )}
 
       {/* Header (Top Navigation & Clearances) */}
-      <header className="bg-[#0A0A0B] border-b border-[#2A2A2E] px-4 sm:px-6 lg:px-12 py-3 sm:py-4 flex items-center justify-between z-10 sticky top-0" id="global-header">
+      <header className="bg-[#0A0A0B] border-b border-[#2A2A2E] px-1 sm:px-2 lg:px-4 py-3 sm:py-4 flex items-center justify-between z-10 sticky top-0" id="global-header">
         <div className="flex items-center gap-3 sm:gap-4">
           {/* EchoWatch Styled Golden Hex Logo */}
           <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-[#D4AF37] to-[#8A6D3B] rounded-lg flex items-center justify-center text-black font-extrabold text-lg sm:text-xl shadow-lg shadow-[#D4AF37]/10 select-none">
@@ -615,7 +615,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
         </div>
 
         {/* Desktop Custom Nav Link Tabs */}
-        <nav className="hidden lg:flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A0A0A5]">
+        <nav className="hidden lg:flex items-center gap-1 text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A0A0A5] ml-6">
           {[ 
             { id: 'campaigns', label: 'Intel Kampanye', icon: Radio },
             { id: 'accounts', label: 'Profil Entitas', icon: UserX },
@@ -1509,11 +1509,15 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               insight={trendInsight.insight} 
               insightMode={trendInsight.mode} 
               isTrendLoading={isTrendLoading} 
+              onHashtagClick={(tag) => {
+                setSearchKeywordInput(tag);
+                handleKeywordSearch();
+              }}
             />
           )}
 
           {/* TAB 4: Sentiment Analysis */}
-          {activeTab === 'sentiment' && (
+          <div className={activeTab === 'sentiment' ? '' : 'hidden'}>
             <Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500 font-mono text-sm border border-slate-800 rounded-xl p-8">Memuat Analisis Sentimen...</div>}>
               <SentimentAnalysis 
                 showNotification={showNotification}
@@ -1524,7 +1528,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
                 }}
               />
             </Suspense>
-          )}
+          </div>
 
           {/* TAB 5: Gemini-powered Analyzer Playground */}
           {activeTab === 'analyzer' && (

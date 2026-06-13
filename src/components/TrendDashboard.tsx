@@ -7,9 +7,10 @@ interface TrendDashboardProps {
   insight: string;
   insightMode: 'AI' | 'Heuristic' | null;
   isTrendLoading: boolean;
+  onHashtagClick?: (tag: string) => void;
 }
 
-export default function TrendDashboard({ trendData, insight, insightMode, isTrendLoading }: TrendDashboardProps) {
+export default function TrendDashboard({ trendData, insight, insightMode, isTrendLoading, onHashtagClick }: TrendDashboardProps) {
   if (isTrendLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -86,16 +87,22 @@ export default function TrendDashboard({ trendData, insight, insightMode, isTren
                 <div className="flex justify-between"><span>Postingan</span><span className="text-slate-200 font-bold">{p.postCount}</span></div>
                 <div className="flex justify-between"><span>Engagement</span><span className="text-slate-200 font-bold">{p.totalEngagement?.toLocaleString()}</span></div>
               </div>
-              {p.topHashtags?.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-slate-800">
-                  <span className="text-[9px] text-slate-500 uppercase">Top Hashtag</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {p.topHashtags.map((tag: string) => (
-                      <span key={tag} className="text-[10px] bg-slate-900 text-slate-300 px-1.5 py-0.5 rounded border border-slate-800">{tag}</span>
-                    ))}
+                {p.topHashtags?.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-slate-800">
+                    <span className="text-[9px] text-slate-500 uppercase">Top Hashtag</span>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {p.topHashtags.map((tag: string) => (
+                        <span 
+                          key={tag} 
+                          className="text-[10px] bg-slate-900 text-slate-300 px-1.5 py-0.5 rounded border border-slate-800 cursor-pointer hover:border-amber-500/50 hover:text-amber-400 transition"
+                          onClick={() => onHashtagClick?.(tag)}
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
               {p.topPosts?.length > 0 && (
                 <div className="mt-2 text-[9px] text-slate-500 truncate" title={p.topPosts[0]?.text}>
                   Top: {p.topPosts[0]?.text}
