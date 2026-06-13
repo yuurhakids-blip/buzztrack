@@ -1230,50 +1230,67 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
   const { keyword } = req.body;
   if (!keyword) return res.status(400).json({ error: "keyword required" });
 
-  // First: try to filter from existing global scrapedPosts (does NOT trigger a new search)
+  const id = Date.now().toString();
+  const platformLabels: Record<string, string> = { X: 'X', twitter: 'X', youtube: 'YouTube', tiktok: 'TikTok' };
+
+  // Try real Python scrapers first — results stored LOCALLY, never in global scrapedCampaigns/scrapedAccounts/scrapedPosts
+  let scraperPosts: any[] = [];
+  let source = 'scraper';
+
+  const twitterConfigured = !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token"));
+  const youtubeConfigured = !!(process.env.YOUTUBE_API_KEY);
+  const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN);
+
+  if (!process.env.DISABLE_PYTHON_SCRAPERS && (twitterConfigured || youtubeConfigured || tiktokConfigured)) {
+    try {
+      const scraperPromises: Promise<any>[] = [];
+      if (twitterConfigured) scraperPromises.push(runPythonScraper("twitter", keyword, 50));
+      if (youtubeConfigured) scraperPromises.push(runPythonScraper("youtube", keyword, 50));
+      if (tiktokConfigured) scraperPromises.push(runPythonScraper("tiktok", keyword, 50));
+
+      const results = await Promise.all(scraperPromises);
+      const succeeded = results.filter(r => r.success === true && r.results && r.results.length > 0);
+
+      succeeded.forEach((platformResult: any) => {
+        const platform = platformLabels[platformResult.platform] || platformResult.platform;
+        (platformResult.results || []).forEach((item: any, idx: number) => {
+          scraperPosts.push({
+            id: `sentiment-post-${id}-${platform}-${idx}`,
+            platform,
+            authorUsername: item.author || 'unknown',
+            text: item.snippet || item.title || '',
+            postUrl: item.url || '#',
+            publishedAt: item.publishedAt || new Date().toISOString(),
+            likes: item.likes || 0,
+            comments: item.comments || 0,
+            shares: item.shares || 0,
+            reach: (item.views || 0) + (item.likes || 0) * 10,
+            engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
+          });
+        });
+      });
+
+      if (scraperPosts.length > 0) {
+        console.log(`[Sentiment] Scrapers returned ${scraperPosts.length} real posts for "${keyword}"`);
+        return res.json({ posts: scraperPosts, source: 'scraper' });
+      }
+    } catch (err) {
+      console.warn(`[Sentiment] Scraper error for "${keyword}":`, (err as Error)?.message);
+    }
+  }
+
+  // Scraper not configured or returned 0 results — filter from existing global scrapedPosts first
   const existing = scrapedPosts.filter((p: any) =>
     p.text && p.text.toLowerCase().includes(keyword.toLowerCase())
   );
   if (existing.length > 0) {
+    console.log(`[Sentiment] Using ${existing.length} existing posts for "${keyword}"`);
     return res.json({ posts: existing, source: 'existing' });
   }
 
-  // Fallback: generate isolated synthetic posts for this keyword ONLY (does NOT touch global state)
-  const id = Date.now().toString();
-  const platforms = ['X', 'TikTok', 'YouTube'];
-  const templates = [
-    `${keyword} benar-benar membawa perubahan positif! #${keyword} #perubahan`,
-    `Saya sangat mendukung ${keyword}. #${keyword} #mendukung`,
-    `${keyword} adalah langkah maju yang cerdas. #${keyword} #maju`,
-    `${keyword} berhasil membuktikan diri. #${keyword} #sukses`,
-    `Senang sekali melihat perkembangan ${keyword}. #${keyword} #bangga`,
-    `${keyword} hanya gimmick belaka. #${keyword} #kecewa`,
-    `Saya curiga ${keyword} tidak seperti yang dikatakan. #${keyword} #curiga`,
-    `${keyword} gagal total. #${keyword} #gagal`,
-    `Stop ${keyword}, ini penipuan. #${keyword} #hoax`,
-    `${keyword} merusak kepercayaan publik. #${keyword} #rusak`,
-    `${keyword} sedang hangat diperbincangkan. #${keyword} #viral`,
-    `Ada yang bisa jelaskan tentang ${keyword}? #${keyword} #info`,
-    `${keyword} trending di mana-mana. #${keyword} #trending`,
-    `Apa pendapat kalian tentang ${keyword}? #${keyword} #opini`,
-    `${keyword} masuk berita utama hari ini. #${keyword} #berita`,
-  ];
-
-  const localPosts = Array.from({ length: 30 }, (_, i) => ({
-    id: `sentiment-post-${id}-${i}`,
-    platform: platforms[i % 3],
-    authorUsername: `user_${keyword.replace(/\s+/g, '_')}_${i}`,
-    text: templates[i % templates.length],
-    postUrl: '#',
-    publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
-    likes: Math.floor(50 + Math.random() * 500),
-    comments: Math.floor(10 + Math.random() * 100),
-    shares: Math.floor(5 + Math.random() * 200),
-    reach: Math.floor(1000 + Math.random() * 10000),
-    engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
-  }));
-
-  res.json({ posts: localPosts, source: 'synthetic' });
+  // Last resort: scraper not configured AND no existing posts — inform frontend so user can configure credentials
+  console.warn(`[Sentiment] No scraper credentials configured and no existing posts for "${keyword}"`);
+  res.json({ posts: [], source: 'none', message: 'Tidak ada kredensial scraper yang dikonfigurasi. Tambahkan TWITTER_COOKIES, YOUTUBE_API_KEY, atau TIKTOK_MS_TOKEN di .env untuk mengambil data nyata.' });
 });
 
 app.get("/api/trend/daily", async (_req, res) => {

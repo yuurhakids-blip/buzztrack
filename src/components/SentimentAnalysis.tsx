@@ -145,17 +145,28 @@ export default function SentimentAnalysis({
     try {
       let scrapedPosts: PostData[] = [];
 
-      // Gunakan endpoint sentiment khusus — TIDAK mengubah data tab lain (intel kampanye, profil, dll.)
+      // Gunakan endpoint sentiment khusus — menggunakan scraper nyata, TIDAK mengubah data tab lain
       try {
-        showNotification('success', 'Mengambil data postingan untuk analisis sentimen...');
+        showNotification('success', 'Memulai scraping data real-time untuk analisis sentimen...');
         const result = await api.social.sentimentPosts(topic);
-        scrapedPosts = (result.posts || []).map((p: any) => {
-          const { sentiment, score } = analyzePostSentiment(p.text);
+
+        if ((result as any).source === 'none' || !result.posts || result.posts.length === 0) {
+          const msg = (result as any).message || 'Scraper tidak mengembalikan data. Pastikan kredensial scraper sudah dikonfigurasi di Pengaturan.';
+          showNotification('error', msg);
+          setLoading(false);
+          return;
+        }
+
+        const sourceLabel = (result as any).source === 'scraper' ? 'scraper nyata' : (result as any).source === 'existing' ? 'data investigasi aktif' : 'data tersedia';
+        showNotification('success', `${result.posts.length} postingan diambil dari ${sourceLabel}`);
+
+        scrapedPosts = result.posts.map((p: any) => {
+          const { sentiment, score } = analyzePostSentiment(p.text || '');
           return {
             id: p.id,
-            text: p.text,
-            authorUsername: p.authorUsername,
-            platform: p.platform,
+            text: p.text || '',
+            authorUsername: p.authorUsername || 'unknown',
+            platform: p.platform || 'X',
             date: (p.publishedAt || new Date().toISOString()).split('T')[0],
             likes: p.likes || 0,
             comments: p.comments || 0,
@@ -169,7 +180,9 @@ export default function SentimentAnalysis({
         });
       } catch (e) {
         console.error('[Sentiment] sentiment-posts fetch failed:', e);
-        showNotification('error', 'Gagal mengambil data postingan untuk sentimen.');
+        showNotification('error', 'Gagal menghubungi backend untuk scraping sentimen.');
+        setLoading(false);
+        return;
       }
 
       // Filter berdasarkan rentang tanggal
