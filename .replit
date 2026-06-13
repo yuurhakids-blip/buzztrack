@@ -42,3 +42,27 @@ externalPort = 80
 deploymentTarget = "vm"
 run = ["bash", "-c", "node dist/server.cjs & npx vite preview --port 5000 --host 0.0.0.0"]
 build = ["npm", "run", "build"]
+
+[userenv]
+
+[userenv.shared]
+GEMINI_API_KEY = "AQ.Ab8RN6K1u68WbmNNWUAgey4gIARnVbcOx9aboBFQYgMzyjdi4A"
+APP_URL = "http://localhost:3000"
+VITE_API_BASE = ""
+TWITTER_CLIENT_ID = "aHFydnBfUlowUWswZUxldXFrWlM6MTpjaQ"
+TWITTER_CLIENT_SECRET = "U22fG-BvWpTXvjtzya3KUZQ75iwU3F-EGnE-4nYChJZygWTzti"
+TWITTER_BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAADwM4wEAAAAAvlteu804IqZmkUjdVt2IiY8tQPI%3D3xhsmYjaWLPAowgRT0qZSdWU7bbbmWD4XQiEyNOlwazWXPgLr6"
+TWITTER_CONSUMER_KEY = "XnBLEhVOOF3xqU6oZM7mQx7Yn"
+TWITTER_CONSUMER_SECRET = "7VjVGWwDIlooLy9tAKp6QG2pJLcorzApDsITSgTHAYWLiQtZCZ"
+TWITTER_ACCESS_TOKEN = "462675547-ibcluKmhBsDJJJuUzrvLw7ytkjeDM4CWKiQzeDzr"
+TWITTER_ACCESS_TOKEN_SECRET = "nINLkyKxMy9unZvYGzh1X0zd67u5sudAVTKKklixwwcNt"
+TWITTER_COOKIES = "auth_token=e70c12fe3df6c8de88b7c713ee4e6929a56810cc; ct0=b62627bda183a5696b60ab9dafc13e1b7a1eab5cc53e042b2678a80de013da74a6b7ad33f4a4eb6e202c9d76f6c7c81702f157b46c77f7afdedfb3f2a15fee396beab98a97b0acfd4dde5f9656a48d9d"
+YOUTUBE_CLIENT_ID = "832139411147-0qgs06ibp2tjm0i2mnqhf0p0kg7jm1qt.apps.googleusercontent.com"
+YOUTUBE_CLIENT_SECRET = "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"
+YOUTUBE_API_KEY = "AIzaSyDaz4OihdyFmPLUxnku8gaAmji4xwQhFKM"
+TIKTOK_CLIENT_ID = "aw2w57xl5zs4ex3k"
+TIKTOK_CLIENT_SECRET = "9VftJwkcodJyqL2arqiADK9VchqQBzxj"
+TIKTOK_MS_TOKEN = "EmNEMlK0Jm4QSUWDF-Ap4mfZTZF4IVtut-P6ufBfa4o8yx8dS_K7DDpYh9_gn0tkhrf33HtHXjpag6Y0tNt9o3fcNyWrH-GaCrkvGjgMGo5UoExxl2Ry8o7GjKF0_CHUHVkaJ1mzjrywW7mZ"
+X_USERNAME = "chaotic_ntrls"
+YOUTUBE_USERNAME = "yuurha4446"
+TIKTOK_USERNAME = "yuurha.kido"
