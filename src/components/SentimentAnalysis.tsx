@@ -144,19 +144,22 @@ export default function SentimentAnalysis({
     setLoading(true);
     try {
       let scrapedPosts: PostData[] = [];
+      let source = 'lokal';
 
-      // Gunakan endpoint sentiment khusus — TIDAK mengubah data tab lain (intel kampanye, profil, dll.)
+      // Gunakan endpoint sentiment khusus — menjalankan scraper terisolasi tanpa mengubah data tab lain
       try {
-        showNotification('success', 'Mengambil data postingan untuk analisis sentimen...');
+        showNotification('success', `Mencari data "${topic}" via scraper...`);
         const result = await api.social.sentimentPosts(topic);
         scrapedPosts = (result.posts || []).map((p: any) => {
           const { sentiment, score } = analyzePostSentiment(p.text);
+          const rawDate = p.publishedAt || new Date().toISOString();
+          const postDate = /^\d{10}$/.test(rawDate) ? new Date(parseInt(rawDate) * 1000).toISOString() : rawDate;
           return {
             id: p.id,
             text: p.text,
             authorUsername: p.authorUsername,
             platform: p.platform,
-            date: (p.publishedAt || new Date().toISOString()).split('T')[0],
+            date: postDate.split('T')[0],
             likes: p.likes || 0,
             comments: p.comments || 0,
             shares: p.shares || 0,
@@ -167,9 +170,11 @@ export default function SentimentAnalysis({
             sentimentScore: score
           };
         });
+        source = result.source || 'unknown';
+        console.log('[Sentiment] sentiment-posts result:', { count: scrapedPosts.length, source });
       } catch (e) {
         console.error('[Sentiment] sentiment-posts fetch failed:', e);
-        showNotification('error', 'Gagal mengambil data postingan untuk sentimen.');
+        showNotification('error', 'Gagal mengambil data scraper.');
       }
 
       // Filter berdasarkan rentang tanggal
@@ -184,7 +189,7 @@ export default function SentimentAnalysis({
         });
       }
 
-      showNotification('success', `${scrapedPosts.length} postingan ditemukan untuk "${topic}" (${startDate} — ${endDate || startDate})`);
+      showNotification('success', `${scrapedPosts.length} postingan ditemukan untuk "${topic}" (${startDate} — ${endDate || startDate}) — sumber: ${source}`);
       setPosts(scrapedPosts);
 
       let batchResult: {

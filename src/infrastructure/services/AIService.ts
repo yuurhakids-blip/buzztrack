@@ -108,7 +108,7 @@ export class AIService {
     config: AIConfig,
     platformFilter: string = 'All'
   ): Promise<{ clusters: any[], mode: 'AI' | 'Heuristic' }> {
-    const cacheKey = AICache.generateKey('cluster', `${nodes.length}_${links.length}_${config.model}_${platformFilter}`);
+    const cacheKey = AICache.generateKey('cluster2', `${nodes.length}_${links.length}_${config.model}_${platformFilter}`);
     const cached = AICache.get<{ clusters: any[], mode: 'AI' | 'Heuristic' }>(cacheKey);
     if (cached) return cached;
 
@@ -116,21 +116,118 @@ export class AIService {
     const filteredLinks = links.filter(l => filteredNodes.find(n => n.id === l.source) && filteredNodes.find(n => n.id === l.target));
 
     const { provider, model, apiKey } = config;
-    const prompt = `Analyze this network graph of social media accounts (Platform Filter: ${platformFilter}). 
-    Nodes: ${JSON.stringify(filteredNodes.slice(0, 20))}... 
-    Links: ${JSON.stringify(filteredLinks.slice(0, 30))}...
-    Identify potential botnet clusters within this platform. Return JSON with cluster assignments: { "clusters": [{ "clusterId": "string", "nodeIds": ["string"], "reason": "string" }] }`;
+    const prompt = `Analyze this social media coordination network graph (Platform Filter: ${platformFilter}).
+Each node has: id, label, group (campaign/platform_hub/hashtag/buzzer_master/buzzer), platform, botScore.
+Links represent coordination between nodes.
+
+Identify distinct botnet clusters — groups of nodes working together in a coordinated disinformation campaign.
+
+Rules:
+- Nodes in the same campaign or connected through buzzer_masters likely belong to the same cluster
+- buzzer_master nodes that connect to the same campaign and same hashtags form a cluster
+- A cluster MUST have at least 2 nodes (unless it's a clear isolated campaign node)
+- buzzer nodes with botScore > 80 connected to the same master belong together
+- Multiple campaigns sharing the same hashtags and buzzers are one cluster
+
+Nodes: ${JSON.stringify(filteredNodes.slice(0, 50).map(n => ({ id: n.id, label: n.label, group: n.group, platform: n.platform, botScore: n.botScore })))}
+Links: ${JSON.stringify(filteredLinks.slice(0, 200).map(l => ({ source: l.source, target: l.target, value: l.value })))}
+
+Return ONLY valid JSON (no markdown): { "clusters": [{ "clusterId": "Cluster_A", "nodeIds": ["id1", "id2"], "reason": "brief reason in Indonesian" }] }`;
 
     try {
       const resp = await this.callProviderRaw(prompt, model, apiKey, provider);
-      const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '');
+      const cleanJson = resp.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleanJson);
-      const result = { clusters: JSON.parse(cleanJson).clusters, mode: 'AI' as const };
-      AICache.set(cacheKey, result);
-      return result;
+      if (parsed && Array.isArray(parsed.clusters) && parsed.clusters.length > 0) {
+        const result = { clusters: parsed.clusters, mode: 'AI' as const };
+        AICache.set(cacheKey, result);
+        return result;
+      }
+      throw new Error('Empty clusters');
     } catch {
-      return { clusters: [], mode: 'Heuristic' };
+      return this.heuristicCluster(filteredNodes, filteredLinks);
     }
+  }
+
+  private static heuristicCluster(nodes: any[], links: any[]): { clusters: any[], mode: 'AI' | 'Heuristic' } {
+    const clusters: any[] = [];
+    const assigned = new Set<string>();
+
+    // 1. Group by campaign: all nodes linked to the same campaign
+    const campaignLinks = new Map<string, string[]>();
+    links.forEach(l => {
+      const srcCampaign = nodes.find(n => n.id === l.source && n.group === 'campaign');
+      const tgtCampaign = nodes.find(n => n.id === l.target && n.group === 'campaign');
+      if (srcCampaign) {
+        if (!campaignLinks.has(l.source)) campaignLinks.set(l.source, []);
+        campaignLinks.get(l.source)!.push(l.target);
+      }
+      if (tgtCampaign) {
+        if (!campaignLinks.has(l.target)) campaignLinks.set(l.target, []);
+        campaignLinks.get(l.target)!.push(l.source);
+      }
+    });
+
+    let clusterIdx = 0;
+    campaignLinks.forEach((targets, campaignId) => {
+      const allIds = [campaignId, ...targets];
+      const unassigned = allIds.filter(id => !assigned.has(id));
+      if (unassigned.length >= 2) {
+        unassigned.forEach(id => assigned.add(id));
+        clusters.push({
+          clusterId: `Cluster_${String.fromCharCode(65 + clusterIdx)}`,
+          nodeIds: unassigned,
+          reason: `Terkoordinasi dalam kampanye "${nodes.find(n => n.id === campaignId)?.label || campaignId}"`
+        });
+        clusterIdx++;
+      }
+    });
+
+    // 2. Group high-score buzzers (botScore > 75) connected to same buzzer_master
+    const masterBuzzers = new Map<string, string[]>();
+    links.forEach(l => {
+      const srcIsMaster = nodes.find(n => n.id === l.source && n.group === 'buzzer_master');
+      const tgtIsBuzzer = nodes.find(n => n.id === l.target && n.group === 'buzzer' && (n.botScore || 0) > 75);
+      if (srcIsMaster && tgtIsBuzzer) {
+        if (!masterBuzzers.has(l.source)) masterBuzzers.set(l.source, []);
+        masterBuzzers.get(l.source)!.push(l.target);
+      }
+    });
+
+    masterBuzzers.forEach((buzzers, masterId) => {
+      const unassigned = [masterId, ...buzzers].filter(id => !assigned.has(id));
+      if (unassigned.length >= 2) {
+        unassigned.forEach(id => assigned.add(id));
+        clusters.push({
+          clusterId: `Cluster_${String.fromCharCode(65 + clusterIdx)}`,
+          nodeIds: unassigned,
+          reason: `Buzzer dengan skor tinggi (${buzzers.length} akun) terkoordinasi oleh master "${nodes.find(n => n.id === masterId)?.label || masterId}"`
+        });
+        clusterIdx++;
+      }
+    });
+
+    // 3. Remaining unassigned high-botScore buzzers grouped by platform
+    const platformGroups = new Map<string, string[]>();
+    nodes.filter(n => n.group === 'buzzer' && !assigned.has(n.id) && (n.botScore || 0) > 60).forEach(n => {
+      const platKey = n.platform || 'unknown';
+      if (!platformGroups.has(platKey)) platformGroups.set(platKey, []);
+      platformGroups.get(platKey)!.push(n.id);
+    });
+
+    platformGroups.forEach((ids, plat) => {
+      if (ids.length >= 2) {
+        ids.forEach(id => assigned.add(id));
+        clusters.push({
+          clusterId: `Cluster_${String.fromCharCode(65 + clusterIdx)}`,
+          nodeIds: ids,
+          reason: `${ids.length} akun buzzer skor menengah-tinggi terdeteksi di platform ${plat}`
+        });
+        clusterIdx++;
+      }
+    });
+
+    return { clusters, mode: 'Heuristic' };
   }
 
   static async generateEvidence(posts: any[], config: AIConfig, context?: string): Promise<{ summary: string, mode: 'AI' | 'Heuristic' }> {

@@ -11,6 +11,12 @@ interface NetworkGraphProps {
 }
 
 export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }: NetworkGraphProps) {
+
+const CLUSTER_PALETTE = [
+  "#F97316", "#06B6D4", "#D946EF", "#84CC16", "#3B82F6",
+  "#F43F5E", "#14B8A6", "#EAB308", "#8B5CF6", "#22C55E",
+  "#EC4899", "#0EA5E9", "#F59E0B", "#6366F1", "#10B981",
+];
   const [nodes, setNodes] = useState<NetworkNode[]>([]);
   const [links, setLinks] = useState<NetworkLink[]>([]);
   const [selectedNode, setSelectedNode] = useState<NetworkNode | null>(null);
@@ -22,6 +28,8 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [isClustering, setIsClustering] = useState(false);
   const [clusteringMode, setClusteringMode] = useState<'AI' | 'Heuristic' | null>(null);
+  const [clusterColors, setClusterColors] = useState<Record<string, string>>({});
+  const [clusterReasons, setClusterReasons] = useState<Record<string, string>>({});
   const nodeRef = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,7 +78,12 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
       
       if (result && result.clusters) {
         const clusterMap: Record<string, string> = {};
-        result.clusters.forEach((c: any) => {
+        const colorMap: Record<string, string> = {};
+        const reasonMap: Record<string, string> = {};
+        result.clusters.forEach((c: any, i: number) => {
+          const color = CLUSTER_PALETTE[i % CLUSTER_PALETTE.length];
+          colorMap[c.clusterId] = color;
+          reasonMap[c.clusterId] = c.reason || '';
           c.nodeIds.forEach((id: string) => clusterMap[id] = c.clusterId);
         });
         
@@ -78,7 +91,8 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
           ...n,
           clusterId: clusterMap[n.id] || undefined
         })));
-        console.log(`${result.mode} Clustering Success:`, result.clusters);
+        setClusterColors(colorMap);
+        setClusterReasons(reasonMap);
       }
     } catch (err) {
       console.error("Clustering failed:", err);
@@ -214,7 +228,22 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
     link => nodeIds.has(link.source) && nodeIds.has(link.target)
   );
 
-  const handleNodeClick = (node: NetworkNode) => {
+  const activeClusters = useMemo(() => {
+    const clusterMap = new Map<string, { nodes: string[] }>();
+    filteredNodes.forEach(n => {
+      if (n.clusterId) {
+        if (!clusterMap.has(n.clusterId)) clusterMap.set(n.clusterId, { nodes: [] });
+        clusterMap.get(n.clusterId)!.nodes.push(n.id);
+      }
+    });
+    return Array.from(clusterMap.entries()).map(([id, data]) => ({
+      clusterId: id,
+      nodeCount: data.nodes.length,
+      reason: clusterReasons[id] || '',
+    })).sort((a, b) => b.nodeCount - a.nodeCount);
+  }, [filteredNodes, clusterReasons]);
+
+    const handleNodeClick = (node: NetworkNode) => {
     setSelectedNode(node);
     if (onSelectNode) {
       onSelectNode(node.id, node.label, node.botScore);
@@ -234,7 +263,14 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
     buzzer_low: { fill: '#64748B', stroke: '#94A3B8' },
   };
 
-  const getGroupStyle = (group: string, score?: number, platform?: string) => {
+  const getNodeColor = (node: NetworkNode) => {
+    if (clusteringMode && node.clusterId && clusterColors[node.clusterId]) {
+      return { fill: clusterColors[node.clusterId], stroke: clusterColors[node.clusterId] };
+    }
+    return getGroupStyle(node.group, node.botScore, node.platform);
+  };
+
+    const getGroupStyle = (group: string, score?: number, platform?: string) => {
     if (group === 'campaign') return groupColors.campaign;
     if (group === 'platform_hub') {
       if (platform === 'X') return groupColors.platform_x;
@@ -310,6 +346,13 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
     <MiniNodeShape group={group} fill={fill} stroke={stroke} platform={platform} />
   );
 
+  const clusterLegendItems = activeClusters.map((c, i) => ({
+    key: c.clusterId,
+    color: clusterColors[c.clusterId] || CLUSTER_PALETTE[i % CLUSTER_PALETTE.length],
+    count: c.nodeCount,
+    reason: c.reason,
+  }));
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-slate-900/60 backdrop-blur-md rounded-2xl border border-slate-800 p-6 shadow-2xl overflow-hidden" id="network-container">
       {/* Network Interactive Stage */}
@@ -321,7 +364,7 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
               Live Multiplatform Coordination Map
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Showing linked buzzer networks, topic nodes, and coordinators targeting trending hashtags. Hover on elements to focus connections.
+              {clusteringMode ? `Cluster aktif: ${activeClusters.length} grup terdeteksi. Warna node menunjukkan afiliasi cluster.` : 'Klik "AI CLUSTER GRAPH" untuk mendeteksi grup koordinasi botnet.'}
             </p>
           </div>
             <div className="flex gap-2 items-center">
@@ -414,6 +457,11 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
                 (hoveredNode && (hoveredNode.id === link.source || hoveredNode.id === link.target)) ||
                 (selectedNode && (selectedNode.id === link.source || selectedNode.id === link.target));
 
+              const sameCluster = clusteringMode && srcNode?.clusterId && srcNode.clusterId === tgtNode?.clusterId;
+              const linkColor = sameCluster && srcNode?.clusterId && clusterColors[srcNode.clusterId]
+                ? clusterColors[srcNode.clusterId]
+                : undefined;
+
               return (
                 <g key={`l-${idx}`}>
                   <line
@@ -424,8 +472,12 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
                     className={`transition-all duration-300 ${
                       isLinkHighlighted 
                         ? 'stroke-indigo-400 stroke-[2.5px] opacity-100' 
+                        : sameCluster
+                        ? 'opacity-60'
                         : 'stroke-slate-800 stroke-[1.2px] opacity-40'
                     }`}
+                    stroke={sameCluster && linkColor ? linkColor : undefined}
+                    strokeWidth={sameCluster && isLinkHighlighted ? 2.5 : sameCluster ? 2 : 1.2}
                   />
                   {/* Dynamic pulse along active coordination links */}
                   {isLinkHighlighted && (
@@ -474,11 +526,24 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
                     />
                   )}
 
-                  {/* Node fill body — distinct shapes per group */}
+                  {/* Node fill body — colored by cluster when active */}
                   {(() => {
-                    const c = getGroupStyle(node.group, node.botScore, node.platform);
+                    const c = getNodeColor(node);
                     const r = isSelected ? Math.max(node.size, 10) + 4 : Math.max(node.size, 8);
                     const opacity = isSelected || isHovered || isRelated ? '1' : '0.85';
+                    
+                    if (clusteringMode && node.clusterId) {
+                      return (
+                        <g opacity={opacity}>
+                          <circle r={r + 2} fill="none" stroke={c.fill} strokeWidth="3" opacity="0.7" />
+                          <circle r={r} fill={c.fill} stroke="#fff" strokeWidth="1" opacity="0.3" />
+                          <circle r={r * 0.35} fill="#fff" opacity="0.15" />
+                          {node.botScore && node.botScore > 80 && (
+                            <circle r={r + 4} fill="none" stroke="#ff4444" strokeWidth="1" opacity="0.5" />
+                          )}
+                        </g>
+                      );
+                    }
 
                     if (node.group === 'campaign') {
                       // Concentric circle for campaign/narrative hubs
@@ -629,6 +694,21 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
             >↺</button>
           </div>
           <div className="absolute bottom-3 left-3 flex flex-col gap-0.5 text-[10px] bg-slate-950/95 backdrop-blur px-3 py-2 rounded-lg border border-slate-800/80 text-slate-400 font-mono max-h-[320px] overflow-y-auto">
+            {clusterLegendItems.length > 0 && clusteringMode ? (
+              <>
+                <span className="text-[8px] uppercase tracking-widest text-amber-500 font-bold mb-1">CLUSTER</span>
+                {clusterLegendItems.map(item => (
+                  <div key={item.key} className="flex items-center gap-2 py-0.5">
+                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: item.color }} />
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-300 font-semibold">{item.key}</span>
+                      <span className="text-slate-600">({item.count} node{item.count > 1 ? "s" : ""})</span>
+                    </div>
+                  </div>
+                ))}
+                <span className="text-[8px] uppercase tracking-widest text-slate-600 mt-2 mb-0.5">LEGEND</span>
+              </>
+            ) : null}
             {legendItems.map((item: any) => {
               if (item.isHeader) return <span key={item.key} className="text-[8px] uppercase tracking-widest text-slate-600 mt-1 first:mt-0">{item.key}</span>;
               return (
@@ -790,3 +870,4 @@ export default function NetworkGraph({ onSelectNode, reloadTrigger, dateRange }:
     </div>
   );
 }
+

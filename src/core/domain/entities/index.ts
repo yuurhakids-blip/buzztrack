@@ -45,6 +45,7 @@ export interface NetworkNode {
   botScore?: number;
   postText?: string;
   postUrl?: string;
+  clusterId?: string;
 }
 
 export interface NetworkLink {

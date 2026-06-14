@@ -49,35 +49,32 @@ def get_trending(limit: int = 20):
     }
 
     results = []
+    info = None
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Use yt_dlp to get trending videos (using "trending" as a special query)
-            info = ydl.extract_info("https://www.youtube.com/feed/trending", download=False)
-            if not info or "entries" not in info:
-                # Fallback: search for "trending"
-                info = ydl.extract_info(f"ytsearch{limit}:trending", download=False)
-            
-            if not info or "entries" not in info:
-                print(json.dumps({"success": False, "platform": "YouTube", "error": "No trending results found"}), flush=True)
-                return
-
-            for entry in info["entries"][:limit]:
-                if not entry:
-                    continue
-                results.append({
-                    "title": entry.get("title", ""),
-                    "url": f"https://youtube.com/watch?v={entry.get('id', '')}",
-                    "snippet": entry.get("description", "") or entry.get("title", ""),
-                    "author": entry.get("uploader", "") or entry.get("channel", "") or "",
-                    "publishedAt": entry.get("upload_date", "") or "",
-                    "likes": entry.get("like_count", 0) or 0,
-                    "comments": 0,
-                    "shares": 0,
-                    "views": entry.get("view_count", 0) or 0,
-                })
+            info = ydl.extract_info(f"ytsearch{limit}:trending", download=False)
     except Exception as e:
         print(json.dumps({"success": False, "platform": "YouTube", "error": str(e)}), flush=True)
         return
+
+    if not info or "entries" not in info:
+        print(json.dumps({"success": False, "platform": "YouTube", "error": "No trending results found"}), flush=True)
+        return
+
+    for entry in info["entries"][:limit]:
+        if not entry:
+            continue
+        results.append({
+            "title": entry.get("title", ""),
+            "url": f"https://youtube.com/watch?v={entry.get('id', '')}",
+            "snippet": entry.get("description", "") or entry.get("title", ""),
+            "author": entry.get("uploader", "") or entry.get("channel", "") or "",
+            "publishedAt": entry.get("upload_date", "") or "",
+            "likes": entry.get("like_count", 0) or 0,
+            "comments": 0,
+            "shares": 0,
+            "views": entry.get("view_count", 0) or 0,
+        })
 
     print(json.dumps({"success": True, "platform": "YouTube", "results": results}), flush=True)
 
