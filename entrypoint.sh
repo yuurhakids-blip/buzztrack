@@ -11,7 +11,6 @@ chown -R buzztrack:buzztrack /app/data 2>/dev/null || true
 export TWITTER_COOKIES="${TWITTER_COOKIES}"
 export YOUTUBE_API_KEY="${YOUTUBE_API_KEY}"
 export TIKTOK_MS_TOKEN="${TIKTOK_MS_TOKEN}"
-export DISABLE_PYTHON_SCRAPERS="${DISABLE_PYTHON_SCRAPERS:-false}"
 
 # Drop privileges and run the app
 exec su -s /bin/sh buzztrack -c "node dist/server.cjs"
