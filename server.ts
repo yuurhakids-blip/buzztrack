@@ -905,9 +905,9 @@ app.post("/api/social/search", async (req, res) => {
   let twitter: any = { success: false, platform: 'X', error: 'disabled' };
   let youtube: any = { success: false, platform: 'YouTube', error: 'disabled' };
   let tiktok: any = { success: false, platform: 'TikTok', error: 'disabled' };
-  const twitterConfigured = !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token"));
-  const youtubeConfigured = !!(process.env.YOUTUBE_API_KEY);
-  const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN);
+  const twitterConfigured = !!(process.env.TWITTER_COOKIES?.includes("auth_token"));
+  const youtubeConfigured = !!(process.env.YOUTUBE_API_KEY && process.env.YOUTUBE_API_KEY.length > 5);
+  const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN && process.env.TIKTOK_MS_TOKEN.length > 5);
 
   if (!process.env.DISABLE_PYTHON_SCRAPERS) {
     const scraperPromises: Promise<any>[] = [];
