@@ -470,18 +470,6 @@ function mapScraperResults(results: any[], keyword: string) {
     console.warn("All scrapers returned 0 results");
     return { success: false, error: "No results from scrapers" };
   }
-
-  scrapedTimeline = Array.from({ length: 14 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - 13 + i);
-    return {
-      date: d.toISOString().slice(0, 10),
-      likes: Math.floor(200 + Math.random() * 800),
-      comments: Math.floor(50 + Math.random() * 300),
-      shares: Math.floor(20 + Math.random() * 150),
-      reach: Math.floor(5000 + Math.random() * 20000),
-    };
-  });
 }
 
 // ---------- Copypasta similarity engine ----------
@@ -717,9 +705,7 @@ let trendPosts: any[] = [];
 let trendCampaigns: any[] = [];
 let trendAccounts: any[] = [];
 
-async function generateKeywordData(keyword: string) {
-  throw new Error("Synthetic data disabled");
-}
+// Synthetic data generation is disabled — all data must come from real scrapers
 
 
 // ---------- Social / Network / Report Routes ----------
@@ -735,35 +721,13 @@ app.get("/api/social/demographics", (req, res) => {
   const platform = (req.query as any)?.platform || 'All';
   let filtered = scrapedAccounts;
   if (platform !== 'All') filtered = scrapedAccounts.filter((a: any) => a.platform === platform);
-  const total = filtered.length || 1;
-
-  const ageBuckets: Record<string, number> = { '18-24': 0, '25-34': 0, '35-44': 0, '45+': 0 };
-  const genderBuckets: Record<string, number> = { Male: 0, Female: 0, Other: 0 };
-  const regionBuckets: Record<string, number> = {};
-
-  filtered.forEach((a: any) => {
-    // Age: estimate from botScore (higher score → younger demographic bias)
-    const ageRand = (a.botScore || 50) + Math.random() * 30;
-    if (ageRand < 30) ageBuckets['18-24']++;
-    else if (ageRand < 50) ageBuckets['25-34']++;
-    else if (ageRand < 70) ageBuckets['35-44']++;
-    else ageBuckets['45+']++;
-
-    // Gender: weighted random based on platform
-    const genderSeed = ((a.botScore || 50) * 7 + a.followers) % 100;
-    if (genderSeed < 50) genderBuckets.Male++;
-    else if (genderSeed < 90) genderBuckets.Female++;
-    else genderBuckets.Other++;
-
-    // Region: based on platform + username hash
-    const regionKey = a.platform === 'X' ? 'Indonesia' : a.platform === 'YouTube' ? 'Malaysia' : 'Other';
-    regionBuckets[regionKey] = (regionBuckets[regionKey] || 0) + 1;
-  });
+  const total = filtered.length;
 
   res.json({
-    ageBreakdown: Object.entries(ageBuckets).map(([category, value]) => ({ category, value: Math.round((value / total) * 100) })),
-    genderBreakdown: Object.entries(genderBuckets).map(([category, value]) => ({ category, value: Math.round((value / total) * 100) })),
-    regionBreakdown: Object.entries(regionBuckets).map(([category, value]) => ({ category, value: Math.round((value / total) * 100) })),
+    ageBreakdown: [],
+    genderBreakdown: [],
+    regionBreakdown: [],
+    note: "Demographic data not available from scrapers",
   });
 });
 
@@ -924,22 +888,6 @@ app.get("/api/social/engagement", (_req, res) => {
   res.json(scrapedTimeline);
 });
 
-app.get("/api/social/auth/url", (req, res) => {
-  res.json({ url: "", real: false });
-});
-
-app.post("/api/social/connect", (req, res) => {
-  res.json({ success: false, account: null });
-});
-
-app.post("/api/social/disconnect", (req, res) => {
-  res.json({ success: false });
-});
-
-app.post("/api/social/sync", (req, res) => {
-  res.json({ success: false, message: "No social API keys configured." });
-});
-
 app.post("/api/social/search", async (req, res) => {
   const { keyword } = req.body;
   if (!keyword || keyword === "Reset_Siber_Clean_Slate") {
@@ -985,15 +933,14 @@ app.post("/api/social/search", async (req, res) => {
     await computeBuzzerScores();
   } else {
     if (succeeded.length > 0 && !hasRealData) {
-      console.warn("Scrapers connected but returned 0 results, using synthetic data");
+      console.warn("Scrapers connected but returned 0 results");
     } else {
-      console.warn("All Python scrapers failed, using synthetic data:", { twitter: twitter.error, youtube: youtube.error, tiktok: tiktok.error });
+      console.warn("All Python scrapers failed:", { twitter: twitter.error, youtube: youtube.error, tiktok: tiktok.error });
     }
-    generateKeywordData(keyword);
   }
   res.json({
-    success: true,
-    method: scrapedAccounts.length > 0 ? (hasRealData ? "python" : "synthetic") : "synthetic",
+    success: hasRealData,
+    method: hasRealData ? "python" : "no_data",
     keyword,
     campaigns: scrapedCampaigns,
     accounts: scrapedAccounts,
@@ -1006,110 +953,7 @@ function pick(arr: string[]): string {
 }
 
 // Generate trend-only data WITHOUT touching global scrapedCampaigns/scrapedAccounts/scrapedPosts
-function generateTrendPosts(keyword: string, platforms: string[], count: number, realHashtags?: string[]): any[] {
-  const id = Date.now().toString();
-  const hashtagPool = (realHashtags && realHashtags.length > 0) ? realHashtags : [
-    '#viral', '#trending', '#berita', '#info', '#opini', '#fyp',
-    '#update', '#breakingnews', '#hoax', '#fakta', '#cekfakta',
-    '#politik', '#pemerintah', '#rakyat', '#demokrasi', '#hukum',
-    '#ekonomi', '#pendidikan', '#kesehatan', '#teknologi', '#sosmed',
-    '#kritis', '#dukungan', '#penolakan', '#awas', '#waspada',
-    '#kabar', '#isukini', '#hangat', '#sorotan', '#ramai',
-  ];
-
-  const platformTemplates: Record<string, string[]> = {
-    YouTube: [
-      `${keyword} - Analisis Mendalam ${pick(hashtagPool)}`,
-      `BREAKING: ${keyword} ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `${keyword}: Fakta vs Hoax yang Wajib Kamu Tahu ${pick(hashtagPool)}`,
-      `Video ${keyword} Trending! ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `${keyword} - Full Pembahasan ${pick(hashtagPool)}`,
-      `Apa itu ${keyword}? Penjelasan Lengkap ${pick(hashtagPool)}`,
-      `Ini Dia ${keyword} yang Dibicarakan ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `${keyword} Update Terbaru ${pick(hashtagPool)}`,
-      `Reaksi ${keyword} - Kompilasi ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `Dokumenter: ${keyword} ${pick(hashtagPool)}`,
-    ],
-    TikTok: [
-      `${keyword} lagi viral! ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `Kalian tahu ${keyword} belum? ${pick(hashtagPool)}`,
-      `${keyword} bikin heboh! ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `Duet soal ${keyword} @user ${pick(hashtagPool)}`,
-      `${keyword} POV: ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `STOP ${keyword}!! ${pick(hashtagPool)}`,
-      `${keyword} part 2 #fyp ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `Tutorial ${keyword} buat pemula ${pick(hashtagPool)}`,
-      `${keyword} reaction!! ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-      `Spill ${keyword} dong! ${pick(hashtagPool)}`,
-    ],
-  };
-
-  const defaultTemplates = [
-    `${keyword} benar-benar membawa perubahan positif! ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-    `Saya sangat mendukung ${keyword}. ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-    `${keyword} adalah langkah maju yang cerdas. ${pick(hashtagPool)}`,
-    `${keyword} berhasil membuktikan diri. ${pick(hashtagPool)} ${pick(hashtagPool)}`,
-    `Senang sekali melihat perkembangan ${keyword}. ${pick(hashtagPool)}`,
-  ];
-  return Array.from({ length: count }, (_, i) => {
-    const platform = platforms[i % platforms.length];
-    const pool = platformTemplates[platform] || defaultTemplates;
-    const postUrls: Record<string, string> = {
-      X: `https://x.com/trend_user_${i}/status/${id}${i}`,
-      YouTube: `https://youtube.com/watch?v=${id}${i}`,
-      TikTok: `https://tiktok.com/@trend_user_${i}/video/${id}${i}`,
-    };
-    return {
-      id: `trend-post-${id}-${i}`,
-      platform,
-      authorUsername: `trend_user_${i}`,
-      text: pool[i % pool.length],
-      postUrl: postUrls[platform] || '#',
-      publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
-      likes: Math.floor(50 + Math.random() * 500),
-      comments: Math.floor(10 + Math.random() * 100),
-      shares: Math.floor(5 + Math.random() * 200),
-      reach: Math.floor(1000 + Math.random() * 10000),
-      engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
-    };
-  });
-}
-
-function generateTrendData(keyword: string) {
-  const allPlatforms = ['X', 'TikTok', 'YouTube'];
-  const id = Date.now().toString();
-  trendPosts = generateTrendPosts(keyword, allPlatforms, 45);
-
-  const intensityConfig = [
-    { accounts: 5, posts: 8, reach: 50000 },
-    { accounts: 15, posts: 20, reach: 150000 },
-    { accounts: 35, posts: 45, reach: 400000 },
-  ];
-  trendCampaigns = Array.from({ length: 3 }, (_, i) => {
-    const cfg = intensityConfig[i % 3];
-    return {
-      id: `trend-camp-${id}-${i}`,
-      title: `${keyword} Campaign ${i + 1}`,
-      topic: keyword,
-      platforms: [allPlatforms[i % 3]],
-      intensity: ['Low', 'Medium', 'High'][i % 3],
-      status: 'Active',
-      botRatio: 0.5 + Math.random() * 0.45,
-      reach: cfg.reach,
-      hashtags: [`#${keyword}`],
-      buzzerCount: cfg.accounts,
-    };
-  });
-
-  trendAccounts = Array.from({ length: 10 }, (_, i) => ({
-    id: `trend-acc-${id}-${i}`,
-    username: `trend_buzzer_${i}`,
-    displayName: `Trend Buzzer #${i}`,
-    platform: allPlatforms[i % 3],
-    botScore: Math.floor(60 + Math.random() * 40),
-    status: 'Flagged',
-  }));
-}
+// Synthetic trend data generation is disabled — all data must come from real scrapers
 
 // Map real scraped results into trend-specific stores (does NOT touch global state)
 function mapTrendResults(results: any[], keyword: string) {
@@ -1138,15 +982,6 @@ function mapTrendResults(results: any[], keyword: string) {
   });
 
   trendPosts = allPosts;
-
-  // Ensure every post has at least one hashtag for topHashtags extraction
-  const trendHashtagPool = ['#viral', '#trending', '#berita', '#info', '#opini', '#fyp', '#update', '#breakingnews', '#hoax', '#fakta'];
-  trendPosts = trendPosts.map((p: any) => {
-    if (!p.text || !(/#\w+/g).test(p.text)) {
-      return { ...p, text: `${p.text || ''} ${trendHashtagPool[Math.floor(Math.random() * trendHashtagPool.length)]} ${trendHashtagPool[Math.floor(Math.random() * trendHashtagPool.length)]}` };
-    }
-    return p;
-  });
   trendCampaigns = nonEmpty.map((r, i) => {
     const platform = platformLabels[r.platform] || r.platform;
     const posts = r.results || [];
@@ -1239,32 +1074,16 @@ app.post("/api/social/scrape-trending", async (req, res) => {
 
   if (succeeded.length > 0 && hasRealData) {
     mapTrendResults(succeeded, keyword);
-    // Supplement missing platforms with generated data so all 3 platforms always have content
-    const existingPlatforms = new Set(trendPosts.map((p: any) => p.platform));
-    const allPlatforms = ['X', 'TikTok', 'YouTube'];
-    const missingPlatforms = allPlatforms.filter(pl => !existingPlatforms.has(pl));
-    if (missingPlatforms.length > 0) {
-      // Extract real hashtags from existing X posts to seed supplement data
-      const realHashtags = [...new Set(
-        trendPosts
-          .filter((p: any) => p.text)
-          .flatMap((p: any) => (p.text.match(/#\w+/g) || []))
-      )];
-      const supplemental = generateTrendPosts(keyword, missingPlatforms, 15, realHashtags.length > 0 ? realHashtags : undefined);
-      trendPosts = [...trendPosts, ...supplemental];
-    }
-  } else {
-    generateTrendData(keyword);
   }
 
-  if (dbReady) {
+  if (dbReady && trendPosts.length > 0) {
     const snapPlatforms = computePlatformStats(trendPosts);
     await saveSnapshot(keyword, { totalPosts: trendPosts.length, platforms: snapPlatforms }).catch(() => {});
   }
   broadcastStatus('SCRAPE_DONE', { keyword, totalPosts: trendPosts.length });
   res.json({
-    success: true,
-    method: trendPosts.length > 0 ? (hasRealData ? "python" : "synthetic") : "synthetic",
+    success: hasRealData,
+    method: hasRealData ? "python" : "no_data",
     keyword,
   });
 });
@@ -1555,12 +1374,6 @@ app.post("/api/social/trigger-scrape", async (req, res) => {
   }
 });
 
-app.get("/api/deep-alert", async (_req, res) => {
-  // Logika deteksi kritis simulasi
-  const critical = Math.random() < 0.05; 
-  res.json({ isCritical: critical, message: 'Deteksi lonjakan aktivitas anomali terkoordinasi!' });
-});
-
 app.get("/api/trend", async (_req, res) => {
   // Ambil data sentimen untuk hari ini
   res.json(computeSentimentTimeline().slice(-1));
@@ -1613,8 +1426,6 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
   if (succeeded.length > 0 && hasRealData) {
     mapScraperResults(succeeded, keyword);
     await computeBuzzerScores();
-  } else {
-    generateKeywordData(keyword);
   }
 
   // Collect posts for this topic before restoring globals
@@ -1628,7 +1439,7 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
   scrapedPosts = bakPosts;
   scrapedTimeline = bakTimeline;
 
-  res.json({ posts, source: hasRealData ? 'scraped' : 'synthetic' });
+  res.json({ posts, source: hasRealData ? 'scraped' : 'no_data' });
 });
 
 app.get("/api/trend/history", async (_req, res) => {
