@@ -15,7 +15,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 import { initDatabase, getDb, saveSnapshot, getTrendHistory } from "./src/infrastructure/database.ts";
-import cron from "node-cron";
+import { schedule as cronSchedule, ScheduledTask } from "node-cron";
 
 import { FileCampaignRepository } from "./src/infrastructure/repositories/FileCampaignRepository.ts";
 import { FileAccountRepository } from "./src/infrastructure/repositories/FileAccountRepository.ts";
@@ -136,7 +136,8 @@ app.get("/api/deep-cognition", (req, res) => {
   const accounts = scrapedAccounts.filter(a => !a.username.includes('trend_user'));
   const posts = scrapedPosts.filter(p => !p.authorUsername.includes('trend_user')).filter((p: any) => {
     const text = p.text || '';
-    const combined = (text + ' ' + hashtags).toLowerCase();
+    const postTags = (text.match(/#\w+/g) || []).join(' ');
+    const combined = (text + ' ' + postTags).toLowerCase();
     return /#berita|#indonesia|#hoax|#opini|#politik|#pilkada|#pemilu|#jakarta|#viral|#tren|indonesia|jakarta|pemilu|pilkada|pemerintah|presiden|menteri|daerah|rakyat|bangsa|negara|kebijakan|korupsi|demokrasi/.test(combined);
   });
 
@@ -277,12 +278,12 @@ app.post("/api/reports", async (req, res) => {
   }
 
   const report = await submitReportUseCase.execute({
-    url,
+    reportedUrl: url,
     username,
     platform,
-    narrative,
-    evidence,
-    email,
+    narrativeDescription: narrative,
+    evidenceText: evidence,
+    reporterEmail: email,
   });
 
   // Broadcast graph update if needed
@@ -358,7 +359,7 @@ app.post("/api/ai/label-content", async (req, res) => {
   res.json(result);
 });
 
-const PYTHON_PATH = "C:/Users/hokii/AppData/Local/Programs/Python/Python314/python.exe";
+const PYTHON_PATH = process.env.PYTHON_PATH || "python3";
 
 // ---------- Python scraper integration ----------
 async function runPythonScraper(platform: string, keyword: string, limit: number = 10): Promise<any> {
@@ -368,11 +369,11 @@ async function runPythonScraper(platform: string, keyword: string, limit: number
       platform,
       "--keyword", keyword,
       "--limit", String(limit),
-    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, PYTHONUNBUFFERED: "1" } });
-    return JSON.parse(stdout);
+    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, env: { ...process.env, PYTHONUNBUFFERED: "1" } } as any);
+    return JSON.parse(String(stdout));
   } catch (e: any) {
     if (e.stdout) {
-      try { return JSON.parse(e.stdout); } catch { /* ignore */ }
+      try { return JSON.parse(String(e.stdout)); } catch { /* ignore */ }
     }
     return { success: false, platform, error: e.message || String(e) };
   }
@@ -385,11 +386,11 @@ async function runPythonTrendingScraper(platform: string, limit: number = 10): P
       platform,
       "--trending",
       "--limit", String(limit),
-    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, PYTHONUNBUFFERED: "1" } });
-    return JSON.parse(stdout);
+    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, env: { ...process.env, PYTHONUNBUFFERED: "1" } } as any);
+    return JSON.parse(String(stdout));
   } catch (e: any) {
     if (e.stdout) {
-      try { return JSON.parse(e.stdout); } catch { /* ignore */ }
+      try { return JSON.parse(String(e.stdout)); } catch { /* ignore */ }
     }
     return { success: false, platform, error: e.message || String(e) };
   }
@@ -950,9 +951,9 @@ app.post("/api/social/search", async (req, res) => {
   }
 
   // Try real Python scrapers first (skip if DISABLE_PYTHON_SCRAPERS=true, or if required credentials are missing)
-  let twitter = { success: false, platform: 'X', error: 'disabled' };
-  let youtube = { success: false, platform: 'YouTube', error: 'disabled' };
-  let tiktok = { success: false, platform: 'TikTok', error: 'disabled' };
+  let twitter: any = { success: false, platform: 'X', error: 'disabled' };
+  let youtube: any = { success: false, platform: 'YouTube', error: 'disabled' };
+  let tiktok: any = { success: false, platform: 'TikTok', error: 'disabled' };
   const twitterConfigured = !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token"));
   const youtubeConfigured = !!(process.env.YOUTUBE_API_KEY);
   const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN);
@@ -1199,9 +1200,9 @@ function computePlatformStats(posts: any[]) {
 }
 
 app.post("/api/social/scrape-trending", async (req, res) => {
-  let twitter = { success: false, platform: 'X', error: 'disabled' };
-  let youtube = { success: false, platform: 'YouTube', error: 'disabled' };
-  let tiktok = { success: false, platform: 'TikTok', error: 'disabled' };
+  let twitter: any = { success: false, platform: 'X', error: 'disabled' };
+  let youtube: any = { success: false, platform: 'YouTube', error: 'disabled' };
+  let tiktok: any = { success: false, platform: 'TikTok', error: 'disabled' };
   const twitterConfigured = !!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token"));
   const youtubeConfigured = true; // will check yt-dlp below
   const tiktokConfigured = !!(process.env.TIKTOK_MS_TOKEN);
@@ -1497,7 +1498,7 @@ app.get("/api/export/logs", (_req, res) => {
 });
 
 // ---------- Scraper Schedule ----------
-let scheduledTask: cron.ScheduledTask | null = null;
+let scheduledTask: ScheduledTask | null = null;
 
 app.get("/api/schedule", (_req, res) => {
   if (!dbReady) return res.json({ enabled: false, interval: 60, keywords: [], lastRun: null });
@@ -1516,7 +1517,7 @@ app.post("/api/schedule", async (req, res) => {
 
   if (enabled && keywords && keywords.length > 0) {
     const cronInterval = `*/${interval || 60} * * * *`;
-    scheduledTask = cron.schedule(cronInterval, async () => {
+    scheduledTask = cronSchedule(cronInterval, async () => {
       console.log(`[Cron] Running scheduled scrape for: ${keywords.join(', ')}`);
       // Trigger scrape for each keyword using the existing logic
       for (const kw of keywords) {
@@ -1584,9 +1585,9 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
   const bakTimeline = [...(scrapedTimeline || [])];
 
   // Run the same search logic (scrapers + optional synthetic fallback) in isolation
-  let twitter = { success: false, platform: 'X', error: 'disabled' };
-  let youtube = { success: false, platform: 'YouTube', error: 'disabled' };
-  let tiktok = { success: false, platform: 'TikTok', error: 'disabled' };
+  let twitter: any = { success: false, platform: 'X', error: 'disabled' };
+  let youtube: any = { success: false, platform: 'YouTube', error: 'disabled' };
+  let tiktok: any = { success: false, platform: 'TikTok', error: 'disabled' };
 
   if (!process.env.DISABLE_PYTHON_SCRAPERS) {
     const scraperPromises: Promise<any>[] = [];
