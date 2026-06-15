@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  buzztrack:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: buzztrack
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - API_PORT=3001
+      - APP_URL=http://localhost:3001
+      # Override these via .env or docker-compose.override.yml
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TWITTER_COOKIES=${TWITTER_COOKIES:-}
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
+      - TIKTOK_MS_TOKEN=${TIKTOK_MS_TOKEN:-}
+      - DISABLE_PYTHON_SCRAPERS=${DISABLE_PYTHON_SCRAPERS:-}
+    volumes:
+      # Persist data across container restarts
+      - buzztrack_data:/app/data
+      # Mount .env for local config (optional)
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/campaigns',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  buzztrack_data:
