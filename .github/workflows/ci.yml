@@ -104,10 +104,10 @@ jobs:
 
   # ─── Deploy to Server ──────────────────────────────────
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
     runs-on: ubuntu-latest
     needs: [docker]
-    environment: production
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.2
