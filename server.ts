@@ -73,9 +73,11 @@ app.post("/api/config/env", async (req, res) => {
   try {
     const envPath = path.join(process.cwd(), '.env');
     let envContent = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
-    
+    const stored = readScraperConfig();
+
     // Update existing or add new
     const updateOrAdd = (key: string, val: string) => {
+      if (!val || val.includes('*')) return; // skip masked values
       const regex = new RegExp(`^${key}=.*`, 'm');
       const line = `${key}="${val}"`;
       if (regex.test(envContent)) {
@@ -84,11 +86,11 @@ app.post("/api/config/env", async (req, res) => {
         envContent += `\n${line}`;
       }
     };
-    
+
     updateOrAdd('TWITTER_COOKIES', TWITTER_COOKIES);
     updateOrAdd('YOUTUBE_API_KEY', YOUTUBE_API_KEY);
     updateOrAdd('TIKTOK_MS_TOKEN', TIKTOK_MS_TOKEN);
-    
+
     writeFileSync(envPath, envContent);
     // Reload env for current process
     dotenv.config();
@@ -1244,18 +1246,13 @@ function writeScraperConfig(config: Record<string, string>) {
   writeFileSync(SCRAPER_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
 }
 
-function maskValue(val: string): string {
-  if (!val || val.length < 8) return val || '';
-  return val.slice(0, 4) + '*'.repeat(val.length - 8) + val.slice(-4);
-}
-
 app.get("/api/scraper-config", (_req, res) => {
   const stored = readScraperConfig();
   const envVal = (key: string) => stored[key] || process.env[key] || '';
   res.json({
-    TWITTER_COOKIES: maskValue(envVal('TWITTER_COOKIES')),
-    YOUTUBE_API_KEY: maskValue(envVal('YOUTUBE_API_KEY')),
-    TIKTOK_MS_TOKEN: maskValue(envVal('TIKTOK_MS_TOKEN')),
+    TWITTER_COOKIES: envVal('TWITTER_COOKIES'),
+    YOUTUBE_API_KEY: envVal('YOUTUBE_API_KEY'),
+    TIKTOK_MS_TOKEN: envVal('TIKTOK_MS_TOKEN'),
   });
 });
 

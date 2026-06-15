@@ -115,15 +115,14 @@ export default function Settings({ showNotification }: SettingsProps) {
 
   const handleSaveScraper = async () => {
     try {
-      // Kirim ke backend untuk ditulis ke .env
-      const resp = await fetch('/api/config/env', {
+      const resp = await fetch('/api/scraper-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(scraperConfig),
       });
       const data = await resp.json();
       if (data.success) {
-        showNotification('success', 'Konfigurasi scraper disimpan ke .env!');
+        showNotification('success', 'Konfigurasi scraper berhasil disimpan!');
       } else {
         showNotification('error', data.message || 'Gagal menyimpan');
       }
