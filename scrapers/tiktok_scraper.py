@@ -20,7 +20,12 @@ async def search(keyword: str, limit: int = 20):
                 ms_tokens=[ms_token],
                 num_sessions=1,
                 sleep_after=3,
-                override_browser_args=["--mute-audio"],
+                override_browser_args=[
+                    "--mute-audio",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                ],
             )
 
             # Try hashtag search first (closest to keyword search available)
@@ -90,7 +95,12 @@ async def get_trending(limit: int = 20):
                 ms_tokens=[ms_token],
                 num_sessions=1,
                 sleep_after=3,
-                override_browser_args=["--mute-audio"],
+                override_browser_args=[
+                    "--mute-audio",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                ],
             )
             await get_trending_videos(api, limit, results)
     except Exception as e:

@@ -1,245 +1,132 @@
-# BuzzTrack - Pemindai Disinformasi Multi-Platform
+# BuzzTrack — Pemindai Disinformasi Multi-Platform
 
-## 📋 Tentang Proyek
+Dashboard deteksi disinformasi multi-platform dengan data riil dari scrapers Twitter/X, YouTube, dan TikTok, analitik botnet berbasis AI (Gemini/OpenRouter/Opencode), visualisasi cluster jaringan, dan manajemen konfigurasi scraper via UI.
 
-BuzzTrack (juga dikenal sebagai EchoWatch) adalah aplikasi web full-stack untuk mendeteksi, memantau, dan menganalisis jaringan buzzer, akun terkoordinasi, dan kampanye disinformasi di platform media sosial utama seperti Twitter/X, YouTube, dan TikTok.
+## Fitur Utama
 
-Aplikasi ini menggunakan kombinasi scraping otomatis, analisis AI (menggunakan Google Gemini API dan OpenRouter), serta visualisasi jaringan interaktif untuk membantu Anda mengidentifikasi dan memahami pola disinformasi.
+1. **Intel Kampanye** — Deteksi dan analisis kampanye disinformasi dari data scraper riil
+2. **Profil Entitas** — Skor bot, analisis akun mencurigakan, riwayat aktivitas
+3. **Matriks Jaringan** — Visualisasi graf interaktif hubungan akun-kampanye (zoom, pan, filter platform, AI clustering)
+4. **Analitik Sosial** — Dashboard statistik multi-platform, demografi, distribusi konten
+5. **Tren Harian** — Insight tren dari scraper dengan analisis AI (fallback heuristic jika token AI habis)
+6. **Analis Ancaman** — Analisis konten berbahaya menggunakan AI
+7. **Sentimen Analysis** — Analisis sentimen real-time dari hasil scraper
+8. **Pencarian OSINT** — Pemindaian berdasarkan kata kunci di semua platform
+9. **Pengaturan Scraper** — Konfigurasi API key dan cookies via UI (tersimpan di JSON + env)
 
-## 🛠️ Fitur Utama
-
-1. **Intel Kampanye** - Memantau dan menganalisis kampanye disinformasi yang sedang berjalan
-2. **Profil Entitas** - Analisis mendalam terhadap akun mencurigakan dan skor bot
-3. **Matriks Jaringan** - Visualisasi graf interaktif hubungan antara akun dan kampanye dengan fitur zoom dan pan
-4. **Analitik Sosial** - Dashboard statistik dan demografi lengkap
-5. **Tren Harian** - Analisis tren harian dengan insight AI (fallback ke heuristic jika token AI habis)
-6. **Analis Ancaman** - Analisis konten berpotensi bahaya menggunakan AI
-7. **Lapor Insiden** - Form untuk melaporkan insiden disinformasi
-8. **Pencarian Kata Kunci OSINT** - Memindai jaringan berdasarkan kata kunci tertentu
-9. **Pencarian Trending Otomatis** - Auto-scrape konten trending dari Twitter/X, YouTube, dan TikTok untuk Tren Harian
-
-## 📂 Struktur Proyek
+## Struktur Proyek
 
 ```
 buzztrack/
-├── data/                      # Data penyimpanan lokal
-│   ├── accounts.json
-│   ├── campaigns.json
-│   └── gemini-key.json
-├── scrapers/                  # Script scraping media sosial
-│   ├── __pycache__/
-│   ├── requirements.txt       # Dependencies Python untuk scraper
-│   ├── run_scraper.py         # Runner untuk semua scraper
-│   ├── tiktok_scraper.py      # Scraper TikTok
-│   ├── twitter_scraper.py     # Scraper Twitter/X
-│   └── youtube_scraper.py     # Scraper YouTube
-├── src/                       # Kode frontend (React + TypeScript + Vite)
-│   ├── components/            # Komponen UI
-│   │   ├── CampaignDetails.tsx
-│   │   ├── DatePickerModal.tsx
-│   │   ├── NetworkGraph.tsx
-│   │   ├── SocialAnalyticsDashboard.tsx
-│   │   └── TrendDashboard.tsx
-│   ├── core/                  # Logika bisnis inti (Clean Architecture)
-│   │   ├── domain/
-│   │   │   ├── entities/      # Definisi tipe dan model data
-│   │   │   └── repositories/  # Interface repository
-│   │   └── use-cases/         # Use case aplikasi
-│   ├── infrastructure/        # Implementasi infrastruktur
-│   │   ├── repositories/      # Implementasi repository
-│   │   └── services/          # Layanan eksternal (AI Service)
-│   ├── settings/              # Komponen pengaturan
-│   ├── utils/                 # Utilitas umum
-│   ├── App.tsx                # Komponen utama aplikasi
-│   ├── api.ts                 # API client
-│   └── ...
-├── .env.example               # Contoh file konfigurasi environment
-├── .gitignore
-├── index.html                 # Entry point HTML
-├── package.json               # Dependencies dan script NPM
-├── server.ts                  # Backend Express.js
-├── tsconfig.json
-└── vite.config.ts
+├── data/                       # Persistence (LowDB JSON files)
+│   ├── db.json                 #   Database utama (LowDB)
+│   ├── campaigns.json          #   File repository kampanye
+│   ├── accounts.json           #   File repository akun
+│   └── scraper-config.json     #   Konfigurasi scraper dari UI
+├── scrapers/                   # Python scraper scripts
+│   ├── requirements.txt
+│   ├── run_scraper.py
+│   ├── twitter_scraper.py      # Twitter/X (via twitter-cli + cookies)
+│   ├── youtube_scraper.py      # YouTube (via yt-dlp, no API key needed)
+│   └── tiktok_scraper.py       # TikTok (via TikTokApi + Playwright)
+├── src/                        # Frontend (React + TypeScript + Vite)
+│   ├── components/
+│   ├── core/                   # Clean Architecture
+│   │   ├── domain/entities/
+│   │   ├── domain/repositories/
+│   │   └── use-cases/
+│   ├── infrastructure/
+│   │   ├── repositories/       # FileCampaignRepository dkk.
+│   │   └── services/           # AIService (Gemini/OpenRouter/Opencode)
+│   ├── settings/
+│   ├── App.tsx
+│   └── api.ts
+├── .env.example
+├── Dockerfile                  # Multi-stage build (non-root user, Playwright)
+├── docker-compose.yml
+├── entrypoint.sh               # Fix volume permissions at runtime
+├── server.ts                   # Backend Express (API + WebSocket + static)
+├── vite.config.ts
+└── package.json
 ```
 
-## 🔧 Instalasi dan Pengaturan
+## Persyaratan
 
-### Prasyarat
+- **Node.js** >= 18
+- **Python** >= 3.8 (untuk scraper)
+- **NPM**
 
-Pastikan Anda sudah menginstal:
-
-- **Node.js** (versi 18 atau lebih baru)
-- **Python** (versi 3.8 atau lebih baru) - untuk fitur scraper
-- **NPM** atau **Yarn** - package manager
-
-### Langkah-Langkah Instalasi
-
-1. **Clone repository (jika belum):**
-   ```bash
-   git clone https://github.com/yuurhakids-blip/buzztrack.git
-   cd buzztrack
-   ```
-
-2. **Install dependencies Node.js:**
-   ```bash
-   npm install
-   ```
-
-3. **Install dependencies Python (untuk scraper):**
-   ```bash
-   cd scrapers
-   pip install -r requirements.txt
-   cd ..
-   ```
-
-4. **Konfigurasi Environment:**
-   Salin file `.env.example` menjadi `.env`:
-   ```bash
-   cp .env.example .env
-   # atau di Windows:
-   copy .env.example .env
-   ```
-
-   Edit file `.env` dengan credential Anda:
-   ```env
-   # Twitter/X
-   TWITTER_COOKIES="auth_token=YOUR_AUTH_TOKEN; ct0=YOUR_CT0"
-   
-   # YouTube (jika perlu)
-   YOUTUBE_API_KEY="YOUR_YOUTUBE_API_KEY"
-   
-   # TikTok
-   TIKTOK_MS_TOKEN="YOUR_TIKTOK_MS_TOKEN"
-   
-   # Opsional: Nonaktifkan Python scraper
-   # DISABLE_PYTHON_SCRAPERS=true
-   ```
-
-   **Catatan:**
-   - `TWITTER_COOKIES`: Ambil `auth_token` dan `ct0` dari cookies di browser setelah login ke X/Twitter
-   - `TIKTOK_MS_TOKEN`: Ambil dari cookies di TikTok
-   - Jika Anda tidak ingin mengkonfigurasi scraper, aplikasi akan menggunakan data sintetis sebagai fallback
-
-## 🚀 Menjalankan Aplikasi
-
-### Mode Pengembangan (Development)
-
-Jalankan frontend dan backend secara bersamaan dengan satu perintah:
+## Instalasi & Menjalankan (Local Development)
 
 ```bash
+# 1. Install dependencies
+npm install
+cd scrapers && pip install -r requirements.txt && cd ..
+
+# 2. Konfigurasi .env (salin dari .env.example)
+copy .env.example .env
+# lalu isi credentials
+
+# 3. Jalankan backend + frontend bersamaan
 npm run dev
 ```
 
-Perintah ini akan menjalankan:
-- Backend API server di `http://localhost:3001`
-- Frontend Vite dev server di `http://localhost:3000`
+- Frontend (Vite): **http://localhost:3000**
+- Backend API: **http://localhost:3001**
+- Vite proxy `/api` → backend 3001
 
-### Mode Produksi (Production)
+## Docker (Production)
 
-Untuk build aplikasi dan menjalankannya di mode produksi:
+```bash
+docker compose up -d buzztrack
+```
 
-1. **Build frontend:**
-   ```bash
-   npm run build
-   ```
+- Container `buzztrack` sebagai non-root user
+- Frontend statis: **port 3000**
+- Backend API: **port 3001**
+- Data persist di volume `buzztrack_data:/app/data`
+- Playwright browsers pre-installed di `/app/.cache/ms-playwright`
+- Health check via `GET /api/campaigns` (port 3001)
 
-2. **Jalankan server produksi:**
-   ```bash
-   npm start
-   ```
+### Environment Variables (Docker)
 
-## 📖 Cara Penggunaan
+Semua variabel dari `.env` disubstitusi oleh Docker Compose ke `environment:` block dan juga di-mount sebagai volume `./.env:/app/.env:ro` untuk dibaca `dotenv.config()`.
 
-### 1. Pengaturan API Key AI
+## Credential Scraper
 
-Untuk menggunakan fitur analisis AI, Anda perlu mengatur API key:
-1. Klik menu **Pengaturan** di sidebar
-2. Pilih **Provider** (Gemini atau OpenRouter)
-3. Masukkan **API Key** Anda
-4. (Opsional) Pilih **Model** yang ingin digunakan
-5. Simpan pengaturan
+| Platform | Env Var | Cara Dapatkan |
+|----------|---------|---------------|
+| Twitter/X | `TWITTER_COOKIES` | Cookie `auth_token` + `ct0` setelah login di browser |
+| YouTube | `YOUTUBE_API_KEY` | Google Cloud Console (optional, yt-dlp works without it) |
+| TikTok | `TIKTOK_MS_TOKEN` | Cookie `ms_token` dari tiktok.com setelah login |
 
-### 2. Menggunakan Pencarian Kata Kunci OSINT
+**Zero synthetic data** — Semua data harus dari scraper riil. Jika scraper gagal atau tidak dikonfigurasi, aplikasi return `no_data` tanpa fallback dummy.
 
-1. Masukkan kata kunci di kolom **"Pencarian Kata Kunci OSINT"**
-2. Klik **"Mulai Pindai"**
-3. Tunggu sampai proses selesai
-4. Hasil pencarian akan muncul di tab **Intel Kampanye** dan **Profil Entitas**
+## API Key AI
 
-### 3. Menggunakan Tren Harian
+- **Gemini**: API key dari Google AI Studio
+- **OpenRouter**: API key dari openrouter.ai
+- **Opencode**: API key dari opencode.ai
 
-1. Buka tab **Tren Harian**
-2. Aplikasi akan otomatis mencari konten trending dari Twitter/X, YouTube, dan TikTok
-3. Lihat insight tren yang dihasilkan (AI atau heuristic)
+Caching AI 5 menit TTL. Jika token habis, fallback ke heuristic analysis.
 
-### 4. Menjelajahi Matriks Jaringan
+## Deployment (CI/CD)
 
-1. Buka tab **Matriks Jaringan**
-2. Gunakan fitur:
-   - **Zoom in/out**: Scroll mouse ke atas/bawah
-   - **Pan/scroll**: Klik dan drag area kosong
-   - **Filter platform**: Klik tombol filter di pojok kanan atas
-   - **AI Clustering**: Klik tombol "AI CLUSTER GRAPH" untuk analisis klaster AI
-   - **Pilih node**: Klik node untuk melihat detail di panel kanan
+GitHub Actions workflow (`.github/workflows/ci.yml`):
+- Build Docker image → push ke ghcr.io
+- Deploy via SSH ke server (skip jika secrets tidak dikonfigurasi)
+- Branch `development` dan `main`
 
-## 🔌 API Endpoint
+## Tech Stack
 
-Backend menyediakan beberapa endpoint API utama:
+| Layer | Teknologi |
+|-------|-----------|
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS 4, Recharts, Lucide |
+| Backend | Express.js, ws (WebSocket), LowDB v5 |
+| Scrapers | twitter-cli, yt-dlp, TikTokApi + Playwright |
+| AI | Google Gemini API, OpenRouter API, Opencode API |
+| Docker | Multi-stage build, BuildKit cache, non-root user `buzztrack` |
 
-### Scraping dan Data
-- `POST /api/social/search`: Pencarian berdasarkan kata kunci
-- `POST /api/social/scrape-trending`: Scraping konten trending
-- `GET /api/trend/daily`: Mendapatkan data tren harian
-- `GET /api/campaigns`: Mendapatkan daftar kampanye
-- `GET /api/accounts`: Mendapatkan daftar akun
+## Lisensi
 
-### AI
-- `POST /api/proxy/gemini/generate`: Proxy untuk Gemini API
-
-## 📦 Dependencies Utama
-
-### Frontend
-- **React 19** - Library UI
-- **TypeScript** - Type safety
-- **Vite** - Build tool dan dev server
-- **Tailwind CSS** - Utility-first CSS framework
-- **Lucide React** - Ikon
-- **Recharts** - Visualisasi chart
-
-### Backend
-- **Express.js** - Web framework
-- **TypeScript** - Type safety
-- **tsx** - TypeScript executor
-
-### Scraper
-- **yt-dlp** - YouTube downloader dan scraper
-- **TikTokApi** - TikTok scraper
-- **twitter-cli** - Twitter/X scraper (opsional)
-
-## 📝 Catatan Penting
-
-1. **Rate Limit**: Pastikan Anda memperhatikan rate limit API dan platform media sosial untuk menghindari blokir
-2. **Data Sintetis**: Jika scraper tidak berjalan (tidak ada credential atau error), aplikasi akan otomatis menggunakan data sintetis
-3. **Fallback Heuristic**: Jika API key AI tidak ada atau token habis, aplikasi akan menggunakan analisis heuristic
-4. **Cookies**: Pastikan cookies untuk Twitter/X dan TikTok selalu diperbarui secara berkala
-
-## 🤝 Kontribusi
-
-Kontribusi selalu dipersilakan! Silakan:
-1. Fork repository
-2. Buat branch fitur (`git checkout -b fitur-baru`)
-3. Commit perubahan (`git commit -m 'Menambahkan fitur X'`)
-4. Push ke branch (`git push origin fitur-baru`)
-5. Buat Pull Request ke branch `development`
-
-## 📄 Lisensi
-
-Proyek ini menggunakan lisensi MIT - lihat [LICENSE](LICENSE) untuk detail.
-
-## 📧 Kontak
-
-Untuk pertanyaan atau masalah, silakan buka Issue di repository GitHub.
-
----
-
-Dibuat dengan ❤️ untuk memantau dan melawan disinformasi!
+MIT
