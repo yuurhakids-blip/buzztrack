@@ -115,7 +115,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Trigger update on host (via SSH)
-        if: ${{ secrets.DEPLOY_HOST != '' }}
+        if: env.DEPLOY_HOST != ''
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
