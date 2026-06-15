@@ -1,8 +1,8 @@
 services:
   # ─── Production ───────────────────────────────────────────────
   buzztrack:
-    image: ghcr.io/yuurhakids-blip/buzztrack:develop
-    pull_policy: always
+    image: buzztrack:latest
+    pull_policy: build
     build:
       context: .
       dockerfile: Dockerfile
@@ -30,6 +30,7 @@ services:
     labels:
       - "org.opencontainers.image.title=BuzzTrack"
       - "com.docker.compose.project=buzztrack"
+      - "com.docker.compose.watch=true"
     networks:
       - buzztrack_net
     healthcheck:
@@ -46,8 +47,15 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_LABEL_ENABLE=true
     restart: always
-    # Optional: watch only the buzztrack container
-    command: --ping-only buzztrack
+    command: --label-enable --cleanup buzztrack
+
+volumes:
+  buzztrack_data:
+
+networks:
+  buzztrack_net:
+    driver: bridge
 
   # ─── Development (hot-reload) ─────────────────────────────
