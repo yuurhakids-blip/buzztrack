@@ -54,6 +54,7 @@ const labelContentUseCase = new LabelContentUseCase(geminiRepo);
 // ---------- WebSocket Server ----------
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/graph-updates" });
+const frontendServer = createServer(app);
 wss.setMaxListeners(200);
 wss.on("connection", (ws) => {
   console.log("Client connected for graph updates");
@@ -1493,6 +1494,9 @@ app.get("/api/trend/daily", async (_req, res) => {
   });
 });
 
+const PORT = process.env.PORT || 3000;
+const API_PORT = process.env.API_PORT || 3001;
+
 // Serve static build (only if it exists — allows dev mode without building)
 const BUILD_DIR = path.join(process.cwd(), 'frontend', 'build');
 const hasBuild = existsSync(BUILD_DIR);
@@ -1508,9 +1512,6 @@ if (hasBuild) {
     res.status(200).json({ message: "Buzztrack API is running. Build the frontend with 'npm run build' for the full UI." });
   });
 }
-
-const PORT = process.env.PORT || 3000;
-const API_PORT = process.env.API_PORT || 3001;
 
 // ----- AI Key Status Check -----
 app.post("/api/ai/check-status", async (req, res) => {
@@ -1572,6 +1573,14 @@ process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
 });
 
+const isProduction = process.env.NODE_ENV === 'production' && process.env.DISABLE_HMR === 'true';
+if (isProduction) {
+  frontendServer.listen(PORT, () => {
+    console.log(`Frontend + API ready on port ${PORT}`);
+  });
+} else {
+  console.log(`Frontend handled by Vite on port ${PORT}, API only on port ${API_PORT}`);
+}
 server.listen(API_PORT, () => {
   console.log(`API server running on port ${API_PORT}`);
 });

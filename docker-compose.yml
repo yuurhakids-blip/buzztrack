@@ -14,7 +14,7 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - API_PORT=3001
-      - APP_URL=http://localhost:3001
+      - APP_URL=http://localhost:3000
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - TWITTER_COOKIES=${TWITTER_COOKIES:-}
@@ -33,7 +33,7 @@ services:
     networks:
       - buzztrack_net
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/campaigns',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/api/campaigns',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
       interval: 30s
       timeout: 5s
       retries: 3

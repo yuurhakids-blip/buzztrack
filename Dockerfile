@@ -55,7 +55,7 @@ WORKDIR /app
 COPY --from=deps /prod_modules ./node_modules
 
 # Copy built artifacts
-COPY --from=frontend-build /app/dist ./dist
+COPY --from=frontend-build /app/dist ./frontend/build
 COPY --from=backend-bundle /app/dist/server.cjs ./dist/server.cjs
 COPY --from=backend-bundle /app/dist/server.cjs.map ./dist/server.cjs.map
 
@@ -63,23 +63,31 @@ COPY --from=backend-bundle /app/dist/server.cjs.map ./dist/server.cjs.map
 COPY scrapers/ ./scrapers/
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m venv /venv && \
-    /venv/bin/pip install --no-cache-dir -r scrapers/requirements.txt
+    /venv/bin/pip install --no-cache-dir -r scrapers/requirements.txt && \
+    /venv/bin/playwright install --with-deps chromium
 
 # Copy data directory (for runtime persistence — override with volume)
 COPY data/ ./data/
 
 # Create non-root user for security
 RUN groupadd -r buzztrack && useradd -r -g buzztrack -d /app -s /sbin/nologin buzztrack && \
-    chown -R buzztrack:buzztrack /app /venv
+    chown -R buzztrack:buzztrack /app /venv && \
+    # Move Playwright browsers to buzztrack's home
+    mkdir -p /app/.cache && \
+    mv /root/.cache/ms-playwright /app/.cache/ms-playwright && \
+    chown -R buzztrack:buzztrack /app/.cache
 
-USER buzztrack
+# Entrypoint: fix volume permissions then drop privileges
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Environment defaults
 ENV NODE_ENV=production \
     PORT=3000 \
     API_PORT=3001 \
     PYTHON_PATH=/venv/bin/python3 \
-    DISABLE_HMR=true
+    DISABLE_HMR=true \
+    PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
 
 EXPOSE 3000 3001
 
@@ -87,4 +95,4 @@ EXPOSE 3000 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD node -e "require('http').get('http://localhost:${API_PORT}/api/campaigns',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
-CMD ["node", "dist/server.cjs"]
+ENTRYPOINT ["/entrypoint.sh"]
