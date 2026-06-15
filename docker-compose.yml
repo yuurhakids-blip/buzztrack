@@ -1,6 +1,8 @@
 services:
-  # ─── Production ───────────────────────────────────────────
+  # ─── Production ───────────────────────────────────────────────
   buzztrack:
+    image: ghcr.io/yuurhakids-blip/buzztrack:develop
+    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
@@ -20,11 +22,9 @@ services:
       - TWITTER_COOKIES=${TWITTER_COOKIES:-}
       - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
       - TIKTOK_MS_TOKEN=${TIKTOK_MS_TOKEN:-}
-      - DISABLE_PYTHON_SCRAPERS=${DISABLE_PYTHON_SCRAPERS:-}
+      - DISABLE_PYTHON_SCRAPERS=false
     volumes:
-      # Persist data across container restarts
       - buzztrack_data:/app/data
-      # Mount .env for local config (optional)
       - ./.env:/app/.env
     restart: unless-stopped
     labels:
@@ -39,45 +39,15 @@ services:
       retries: 3
       start_period: 15s
 
-  # ─── Development (hot-reload) ─────────────────────────────
-  dev:
-    profiles: ["dev"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: deps
-    container_name: buzztrack-dev
-    ports:
-      - "3000:3000"
-      - "3001:3001"
-    environment:
-      - NODE_ENV=development
-      - PORT=3000
-      - API_PORT=3001
-      - DISABLE_HMR=false
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - TWITTER_COOKIES=${TWITTER_COOKIES:-}
-      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
-      - TIKTOK_MS_TOKEN=${TIKTOK_MS_TOKEN:-}
-      - DISABLE_PYTHON_SCRAPERS=${DISABLE_PYTHON_SCRAPERS:-}
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
     volumes:
-      # Mount source for hot-reload
-      - ./server.ts:/app/server.ts:ro
-      - ./src:/app/src:ro
-      - ./scrapers:/app/scrapers:ro
-      - ./data:/app/data
-      - ./.env:/app/.env:ro
-      # Exclude node_modules from bind mount
-      - /app/node_modules
-    command: npx concurrently -k "tsx server.ts" "vite"
-    restart: unless-stopped
-    networks:
-      - buzztrack_net
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=300
+    restart: always
+    # Optional: watch only the buzztrack container
+    command: --ping-only buzztrack
 
-volumes:
-  buzztrack_data:
-
-networks:
-  buzztrack_net:
-    driver: bridge
+  # ─── Development (hot-reload) ─────────────────────────────

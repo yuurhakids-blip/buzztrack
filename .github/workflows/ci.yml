@@ -86,7 +86,7 @@ jobs:
             type=ref,event=branch
             type=sha,prefix=,suffix=,format=short
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' }}
+            type=raw,value=latest,enable=true
             type=raw,value=develop,enable=${{ github.ref == 'refs/heads/development' }}
             type=raw,value=stable,enable=${{ github.ref == 'refs/heads/main' }}
 
