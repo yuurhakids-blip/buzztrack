@@ -371,7 +371,7 @@ async function runPythonScraper(platform: string, keyword: string, limit: number
       platform,
       "--keyword", keyword,
       "--limit", String(limit),
-    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, env: { ...process.env, PYTHONUNBUFFERED: "1" } } as any);
+    ], { timeout: 60000, cwd: process.cwd(), windowsHide: true, env: { ...process.env, PYTHONUNBUFFERED: "1" } } as any);
     return JSON.parse(String(stdout));
   } catch (e: any) {
     if (e.stdout) {
@@ -388,7 +388,7 @@ async function runPythonTrendingScraper(platform: string, limit: number = 10): P
       platform,
       "--trending",
       "--limit", String(limit),
-    ], { timeout: 30000, cwd: process.cwd(), windowsHide: true, env: { ...process.env, PYTHONUNBUFFERED: "1" } } as any);
+    ], { timeout: 60000, cwd: process.cwd(), windowsHide: true, env: { ...process.env, PYTHONUNBUFFERED: "1" } } as any);
     return JSON.parse(String(stdout));
   } catch (e: any) {
     if (e.stdout) {
@@ -1380,21 +1380,19 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
   const { keyword } = req.body;
   if (!keyword) return res.status(400).json({ error: "keyword required" });
 
-  // First: try to filter from existing global scrapedPosts (does NOT trigger a new search)
+  // Collect existing relevant posts first (from prior searches on other tabs)
   const existing = scrapedPosts.filter((p: any) =>
-    p.text && p.text.toLowerCase().includes(keyword.toLowerCase())
+    (p.text || '').toLowerCase().includes(keyword.toLowerCase()) ||
+    (p.authorUsername || '').toLowerCase().includes(keyword.toLowerCase())
   );
-  if (existing.length > 0) {
-    return res.json({ posts: existing, source: 'existing' });
-  }
 
-  // Backup globals to avoid polluting campaign/social tabs
+  // Backup globals for isolated scrape
   const bakCampaigns = [...scrapedCampaigns];
   const bakAccounts = [...scrapedAccounts];
   const bakPosts = [...scrapedPosts];
   const bakTimeline = [...(scrapedTimeline || [])];
 
-  // Run the same search logic (scrapers + optional synthetic fallback) in isolation
+  // Always run fresh scrapers for this specific keyword (higher limit)
   let twitter: any = { success: false, platform: 'X', error: 'disabled' };
   let youtube: any = { success: false, platform: 'YouTube', error: 'disabled' };
   let tiktok: any = { success: false, platform: 'TikTok', error: 'disabled' };
@@ -1402,11 +1400,11 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
   if (!process.env.DISABLE_PYTHON_SCRAPERS) {
     const scraperPromises: Promise<any>[] = [];
     if (!!(process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.includes("auth_token")))
-      scraperPromises.push(runPythonScraper("twitter", keyword, 50));
+      scraperPromises.push(runPythonScraper("twitter", keyword, 100));
     if (!!(process.env.YOUTUBE_API_KEY))
-      scraperPromises.push(runPythonScraper("youtube", keyword, 50));
+      scraperPromises.push(runPythonScraper("youtube", keyword, 100));
     if (!!(process.env.TIKTOK_MS_TOKEN))
-      scraperPromises.push(runPythonScraper("tiktok", keyword, 50));
+      scraperPromises.push(runPythonScraper("tiktok", keyword, 100));
     if (scraperPromises.length > 0) {
       const results = await Promise.all(scraperPromises);
       results.forEach(r => {
@@ -1425,18 +1423,27 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
     await computeBuzzerScores();
   }
 
-  // Collect posts for this topic before restoring globals
-  const posts = scrapedPosts
-    .filter((p: any) => p.text?.toLowerCase().includes(keyword.toLowerCase()))
-    .slice(0, 50);
+  // Collect ALL posts from this fresh scrape (keyword-matched + any new posts)
+  const freshPosts = scrapedPosts.filter((p: any) =>
+    (p.text || '').toLowerCase().includes(keyword.toLowerCase()) ||
+    (p.authorUsername || '').toLowerCase().includes(keyword.toLowerCase())
+  );
 
-  // Restore globals immediately — sentiment data is returned directly, not stored
+  // Restore globals immediately
   scrapedCampaigns = bakCampaigns;
   scrapedAccounts = bakAccounts;
   scrapedPosts = bakPosts;
   scrapedTimeline = bakTimeline;
 
-  res.json({ posts, source: hasRealData ? 'scraped' : 'no_data' });
+  // Merge existing + fresh, deduplicate by id
+  const seen = new Set<string>();
+  const merged = [...freshPosts, ...existing].filter((p: any) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+
+  res.json({ posts: merged, source: hasRealData ? 'scraped' : (merged.length > 0 ? 'existing' : 'no_data') });
 });
 
 app.get("/api/trend/history", async (_req, res) => {
