@@ -10,8 +10,8 @@ async function testAI() {
     console.log("SKIP TEST: GEMINI_API_KEY tidak ditemukan di .env");
     return;
   }
-
-  const useCase = new AnalyzeThreatUseCase(mockRepo as any);
+  
+  const useCase = new AnalyzeThreatUseCase(mockRepo as any, 'Gemini', 'gemini-1.5-flash', apiKey);
   console.log("--- REAL AI TEST START ---");
   try {
     const result = await useCase.execute('test', 'Boikot produk asing sekarang juga!', 'X');
