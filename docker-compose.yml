@@ -29,7 +29,6 @@ services:
     labels:
       - "org.opencontainers.image.title=BuzzTrack"
       - "com.docker.compose.project=buzztrack"
-      - "com.docker.compose.watch=true"
     networks:
       - buzztrack_net
     healthcheck:
@@ -39,16 +38,7 @@ services:
       retries: 3
       start_period: 15s
 
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_POLL_INTERVAL=300
-      - WATCHTOWER_LABEL_ENABLE=true
-    restart: always
-    command: --label-enable --cleanup buzztrack
+
 
 volumes:
   buzztrack_data:
