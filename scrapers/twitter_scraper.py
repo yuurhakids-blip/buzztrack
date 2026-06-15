@@ -2,7 +2,10 @@ import json
 import os
 import shutil
 import subprocess
+from dotenv import load_dotenv
 
+# Load .env from project root
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 TWITTER_EXE = shutil.which("twitter") or "twitter"
 

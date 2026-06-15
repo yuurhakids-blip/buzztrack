@@ -153,7 +153,31 @@ Return ONLY valid JSON (no markdown): { "clusters": [{ "clusterId": "Cluster_A",
     const clusters: any[] = [];
     const assigned = new Set<string>();
 
-    // 1. Group by campaign: all nodes linked to the same campaign
+    // 1. Cross-Platform Mapping: Hubungkan akun dengan username sama di platform berbeda
+    const usernameMap = new Map<string, string[]>();
+    nodes.forEach(n => {
+      if (n.group === 'buzzer' || n.group === 'buzzer_master') {
+        const username = n.label.toLowerCase().trim();
+        if (!usernameMap.has(username)) usernameMap.set(username, []);
+        usernameMap.get(username)!.push(n.id);
+      }
+    });
+
+    let clusterIdx = 0;
+    usernameMap.forEach((ids, username) => {
+      const platforms = new Set(ids.map(id => nodes.find(n => n.id === id)?.platform));
+      if (platforms.size > 1 && ids.length >= 2) {
+        ids.forEach(id => assigned.add(id));
+        clusters.push({
+          clusterId: `CrossPlatform_${username}`,
+          nodeIds: ids,
+          reason: `Aktor lintas platform terdeteksi: Akun "${username}" aktif di ${Array.from(platforms).join(' & ')}.`
+        });
+        clusterIdx++;
+      }
+    });
+
+    // 2. Group by campaign: all nodes linked to the same campaign
     const campaignLinks = new Map<string, string[]>();
     links.forEach(l => {
       const srcCampaign = nodes.find(n => n.id === l.source && n.group === 'campaign');
@@ -168,7 +192,6 @@ Return ONLY valid JSON (no markdown): { "clusters": [{ "clusterId": "Cluster_A",
       }
     });
 
-    let clusterIdx = 0;
     campaignLinks.forEach((targets, campaignId) => {
       const allIds = [campaignId, ...targets];
       const unassigned = allIds.filter(id => !assigned.has(id));

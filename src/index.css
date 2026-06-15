@@ -1,1 +1,23 @@
+:root { --bg-primary: #0F172A; --bg-secondary: #1E293B; --text-primary: #F1F5F9; --text-secondary: #94A3B8; --border-color: #1E293B; }
+.light { --bg-primary: #F8FAFC; --bg-secondary: #FFFFFF; --text-primary: #1E293B; --text-secondary: #64748B; --border-color: #E2E8F0; }
+
 @import "tailwindcss";
+
+/* Mobile responsive */
+@media (max-width: 640px) {
+  .xl\:w-80 { width: 100%; }
+  .xl\:border-r { border-right: none; border-bottom: 1px solid var(--border-color); }
+  .xl\:flex-row { flex-direction: column; }
+  aside#left-sidebar { padding: 0.75rem; }
+  section#primary-viewport-container { padding: 0.75rem; }
+  #main-content-layout { flex-direction: column; }
+}
+
+@media (max-width: 1024px) {
+  .lg\:flex { display: none; }
+  #mobile-bottom-nav { display: flex !important; }
+}
+
+@media (min-width: 1025px) {
+  #mobile-bottom-nav { display: none !important; }
+}

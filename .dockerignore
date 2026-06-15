@@ -13,3 +13,7 @@ __pycache__/
 coverage/
 .hermes/
 .gitattributes
+dist/
+accounts.db
+test-ai.ts
+metadata.json

@@ -1,6 +1,9 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+let dbReady = false;
+initDatabase().then(() => { dbReady = true; console.log("[DB] Database initialized"); }).catch(e => console.error("[DB] Init failed:", e));
+
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
@@ -10,6 +13,9 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
+
+import { initDatabase, getDb, saveSnapshot, getTrendHistory } from "./src/infrastructure/database.ts";
+import cron from "node-cron";
 
 import { FileCampaignRepository } from "./src/infrastructure/repositories/FileCampaignRepository.ts";
 import { FileAccountRepository } from "./src/infrastructure/repositories/FileAccountRepository.ts";
@@ -54,6 +60,44 @@ wss.on("connection", (ws) => {
   ws.on("close", () => console.log("Client disconnected"));
 });
 
+function broadcastStatus(type: string, payload: any = {}) {
+  const msg = JSON.stringify({ type, ...payload, timestamp: Date.now() });
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(msg);
+  });
+}
+
+// ---------- Configuration Routes ----------
+app.post("/api/config/env", async (req, res) => {
+  const { TWITTER_COOKIES, YOUTUBE_API_KEY, TIKTOK_MS_TOKEN } = req.body;
+  try {
+    const envPath = path.join(process.cwd(), '.env');
+    let envContent = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
+    
+    // Update existing or add new
+    const updateOrAdd = (key: string, val: string) => {
+      const regex = new RegExp(`^${key}=.*`, 'm');
+      const line = `${key}="${val}"`;
+      if (regex.test(envContent)) {
+        envContent = envContent.replace(regex, line);
+      } else {
+        envContent += `\n${line}`;
+      }
+    };
+    
+    updateOrAdd('TWITTER_COOKIES', TWITTER_COOKIES);
+    updateOrAdd('YOUTUBE_API_KEY', YOUTUBE_API_KEY);
+    updateOrAdd('TIKTOK_MS_TOKEN', TIKTOK_MS_TOKEN);
+    
+    writeFileSync(envPath, envContent);
+    // Reload env for current process
+    dotenv.config();
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 // ---------- API Routes ----------
 app.get("/api/campaigns", async (req, res) => {
   const page = parseInt(req.query.page as string) || 1;
@@ -84,6 +128,145 @@ app.get("/api/stats", async (req, res) => {
     activeBuzzerCount,
     avgBotScore,
     recentReportsCount: 0,
+  });
+});
+
+app.get("/api/deep-cognition", (req, res) => {
+  const campaigns = scrapedCampaigns.filter(c => !c.id.includes('trend_user'));
+  const accounts = scrapedAccounts.filter(a => !a.username.includes('trend_user'));
+  const posts = scrapedPosts.filter(p => !p.authorUsername.includes('trend_user')).filter((p: any) => {
+    const text = p.text || '';
+    const combined = (text + ' ' + hashtags).toLowerCase();
+    return /#berita|#indonesia|#hoax|#opini|#politik|#pilkada|#pemilu|#jakarta|#viral|#tren|indonesia|jakarta|pemilu|pilkada|pemerintah|presiden|menteri|daerah|rakyat|bangsa|negara|kebijakan|korupsi|demokrasi/.test(combined);
+  });
+
+  const highBotAccounts = accounts.filter((a: any) => (a.botScore || 0) >= 70);
+  const activeCampaigns = campaigns.filter((c: any) => c.status === "Active");
+
+  const alerts: any[] = [];
+  const now = Date.now();
+
+  function formatPost(p: any) {
+    return {
+      text: p.text || '',
+      platform: p.platform,
+      author: p.authorUsername || p.author || 'unknown',
+      likes: p.likes || 0,
+      comments: p.comments || 0,
+      shares: p.shares || 0,
+      url: p.postUrl || p.url || '',
+      publishedAt: p.publishedAt || '',
+    };
+  }
+
+  // Alert 1: high bot activity
+  if (highBotAccounts.length >= 5) {
+    const highBotUsernames = new Set(highBotAccounts.map((a: any) => a.username));
+    const relatedPosts = posts.filter((p: any) => highBotUsernames.has(p.authorUsername || p.author));
+    alerts.push({
+      id: 'high-bot',
+      message: `${highBotAccounts.length} akun bot-skoring tinggi (≥70) terdeteksi — kemungkinan aktivitas buzzer terkoordinasi.`,
+      details: highBotAccounts.slice(0, 10).map((a: any) => ({
+        username: a.username, botScore: a.botScore, platform: a.platform, followers: a.followers || 0,
+      })),
+      posts: relatedPosts.map(formatPost),
+    });
+  }
+
+  // Alert 2: many active campaigns
+  if (activeCampaigns.length >= 3) {
+    const campaignTitles = new Set(activeCampaigns.map((c: any) => c.title?.toLowerCase()));
+    const relatedPosts = posts.filter((p: any) =>
+      campaignTitles.has(p.campaignTitle?.toLowerCase()) ||
+      (p.text || '').toLowerCase().includes([...campaignTitles][0] || '')
+    );
+    alerts.push({
+      id: 'active-campaigns',
+      message: `Lonjakan ${activeCampaigns.length} kampanye aktif secara bersamaan — pola koordinasi mencurigakan terdeteksi.`,
+      details: activeCampaigns.slice(0, 10).map((c: any) => ({
+        title: c.title, buzzerCount: c.buzzerCount, platform: c.platforms?.[0] || '', reach: c.reach || 0,
+      })),
+      posts: relatedPosts.map(formatPost),
+    });
+  }
+
+  // Alert 3: copypasta
+  if (posts.length > 0) {
+    const fullTextCounts = new Map<string, { count: number; posts: any[] }>();
+    posts.forEach((p: any) => {
+      const text = (p.text || '').slice(0, 60);
+      if (text.length > 20) {
+        if (!fullTextCounts.has(text)) fullTextCounts.set(text, { count: 0, posts: [] });
+        const entry = fullTextCounts.get(text)!;
+        entry.count++;
+        entry.posts.push(p);
+      }
+    });
+    const copypasta = [...fullTextCounts.entries()].filter(([, v]) => v.count >= 3);
+    if (copypasta.length > 0) {
+      alerts.push({
+        id: 'copypasta',
+        message: `${copypasta.length} pola copypasta terdeteksi — ${copypasta[0][1].count} postingan dengan teks serupa.`,
+        details: copypasta.slice(0, 5).map(([text, data]) => ({
+          text: text + '...', count: data.count,
+        })),
+        posts: copypasta.flatMap(([, data]) => data.posts).map(formatPost),
+      });
+    }
+  }
+
+  // Alert 4: avg bot score
+  if (accounts.length >= 3) {
+    const avgScore = Math.round(accounts.reduce((s: number, a: any) => s + (a.botScore || 0), 0) / accounts.length);
+    if (avgScore >= 50) {
+      const topBotUsernames = new Set(
+        accounts.sort((a: any, b: any) => b.botScore - a.botScore).slice(0, 10).map((a: any) => a.username)
+      );
+      const relatedPosts = posts.filter((p: any) => topBotUsernames.has(p.authorUsername || p.author));
+      alerts.push({
+        id: 'avg-bot-score',
+        message: `Skor bot rata-rata ${avgScore}% — komunitas maya berisiko tinggi terinfestasi akun otomatis.`,
+        details: accounts.sort((a: any, b: any) => b.botScore - a.botScore).slice(0, 10).map((a: any) => ({
+          username: a.username, botScore: a.botScore, platform: a.platform,
+        })),
+        posts: relatedPosts.map(formatPost),
+      });
+    }
+  }
+
+  // Alert 5: platform imbalance
+  const platformCounts: Record<string, number> = {};
+  posts.forEach((p: any) => {
+    const pl = p.platform || 'unknown';
+    platformCounts[pl] = (platformCounts[pl] || 0) + 1;
+  });
+  const sortedPl = Object.entries(platformCounts).sort((a, b) => b[1] - a[1]);
+  if (sortedPl.length >= 2 && sortedPl[0][1] > sortedPl[1][1] * 3) {
+    const dominantPl = sortedPl[0][0];
+    const dominantPosts = posts.filter((p: any) => p.platform === dominantPl);
+    alerts.push({
+      id: 'platform-imbalance',
+      message: `Dominasi ${dominantPl} (${sortedPl[0][1]} posting) — ${Math.round(sortedPl[0][1] / sortedPl[1][1])}x lipat dari ${sortedPl[1][0]}. Kemungkinan serangan terfokus.`,
+      details: sortedPl.map(([pl, count]) => ({ platform: pl, postCount: count })),
+      posts: posts.map(formatPost),
+    });
+  }
+
+  const severity = alerts.length >= 3 ? 'high' : alerts.length >= 1 ? 'medium' : 'low';
+
+  res.json({
+    severity,
+    alerts,
+    summary: alerts.map(a => a.message),
+    stats: {
+      totalCampaigns: campaigns.length,
+      activeCampaigns: activeCampaigns.length,
+      totalAccounts: accounts.length,
+      highBotAccounts: highBotAccounts.length,
+      avgBotScore: accounts.length > 0 ? Math.round(accounts.reduce((s: number, a: any) => s + (a.botScore || 0), 0) / accounts.length) : 0,
+      totalPosts: posts.length,
+    },
+    timestamp: now,
   });
 });
 
@@ -175,10 +358,12 @@ app.post("/api/ai/label-content", async (req, res) => {
   res.json(result);
 });
 
+const PYTHON_PATH = "C:/Users/hokii/AppData/Local/Programs/Python/Python314/python.exe";
+
 // ---------- Python scraper integration ----------
 async function runPythonScraper(platform: string, keyword: string, limit: number = 10): Promise<any> {
   try {
-    const { stdout } = await execFileAsync("python", [
+    const { stdout } = await execFileAsync(PYTHON_PATH, [
       "scrapers/run_scraper.py",
       platform,
       "--keyword", keyword,
@@ -195,7 +380,7 @@ async function runPythonScraper(platform: string, keyword: string, limit: number
 
 async function runPythonTrendingScraper(platform: string, limit: number = 10): Promise<any> {
   try {
-    const { stdout } = await execFileAsync("python", [
+    const { stdout } = await execFileAsync(PYTHON_PATH, [
       "scrapers/run_scraper.py",
       platform,
       "--trending",
@@ -279,11 +464,10 @@ function mapScraperResults(results: any[], keyword: string) {
     };
   });
 
-  // If no scrapers returned results, force fallback to synthetic
+  // If no scrapers returned results, return error
   if (nonEmpty.length === 0) {
-    console.warn("All scrapers returned 0 results, switching to synthetic data");
-    generateKeywordData(keyword);
-    return;
+    console.warn("All scrapers returned 0 results");
+    return { success: false, error: "No results from scrapers" };
   }
 
   scrapedTimeline = Array.from({ length: 14 }, (_, i) => {
@@ -533,115 +717,9 @@ let trendCampaigns: any[] = [];
 let trendAccounts: any[] = [];
 
 async function generateKeywordData(keyword: string) {
-  const id = Date.now().toString();
-  const platforms = ['X', 'TikTok', 'YouTube'];
-  const intensity = ['Low', 'Medium', 'High', 'Critical'];
-  const sentiments = ['Positive', 'Negative', 'Neutral', 'Mixed'];
-  const statuses = ['Active', 'Active', 'Monitoring'];
-  const accStatuses = ['Flagged', 'Under Investigation', 'Verified Buzzer', 'Suspended'];
-
-  const intensityConfig = [
-    { accounts: 5, posts: 8, reach: 50000 },
-    { accounts: 15, posts: 20, reach: 150000 },
-    { accounts: 35, posts: 45, reach: 400000 },
-    { accounts: 60, posts: 80, reach: 800000 },
-  ];
-
-  scrapedCampaigns = Array.from({ length: 3 }, (_, i) => {
-    const cfg = intensityConfig[i % 4];
-    return {
-      id: `camp-${id}-${i}`,
-      title: `${keyword} Campaign ${i + 1}`,
-      description: `Organized disinformation campaign around "${keyword}" detected across social platforms.`,
-      topic: keyword,
-      platforms: [platforms[i % 3]],
-      intensity: intensity[i % 4],
-      sentiment: sentiments[i % 4],
-      startDate: new Date().toISOString().slice(0, 10),
-      status: statuses[i % 3],
-      botRatio: 0.5 + Math.random() * 0.45,
-      reach: cfg.reach,
-      hashtags: [`#${keyword}`, `#${keyword}Now`, `#Dukung${keyword}`],
-      keyNarrative: `Coordinated amplification of "${keyword}" narrative using copypasta and hashtag spamming.`,
-      buzzerCount: cfg.accounts,
-    };
-  });
-
-  let accIdCounter = 0;
-  scrapedAccounts = scrapedCampaigns.flatMap((camp, ci) => {
-    const cfg = intensityConfig[ci % 4];
-    return Array.from({ length: cfg.accounts }, (_, i) => {
-      const idx = accIdCounter++;
-      return {
-        id: `acc-${id}-${idx}`,
-        username: `buzzer_${keyword}_${idx}`,
-        displayName: `Buzzer ${keyword} #${idx}`,
-        platform: platforms[idx % 3],
-        followers: Math.floor(100 + Math.random() * 5000),
-        following: Math.floor(500 + Math.random() * 3000),
-        botScore: Math.floor(60 + Math.random() * 40),
-        status: accStatuses[idx % 4],
-        lastActive: new Date().toISOString(),
-        reason: `Suspected coordination in "${camp.title}" disinformation network.`,
-        recentCopypastaCount: Math.floor(3 + Math.random() * 20),
-        campaignId: camp.id,
-      };
-    });
-  });
-
-  let postIdCounter = 0;
-  scrapedPosts = scrapedCampaigns.flatMap((camp, ci) => {
-    const cfg = intensityConfig[ci % 4];
-    const templates = [
-      `${keyword} benar-benar membawa perubahan positif! #${keyword} #perubahan`,
-      `Saya sangat mendukung ${keyword}. #${keyword} #mendukung`,
-      `${keyword} adalah langkah maju yang cerdas. #${keyword} #maju`,
-      `${keyword} berhasil membuktikan diri. #${keyword} #sukses`,
-      `Senang sekali melihat perkembangan ${keyword}. #${keyword} #bangga`,
-      `${keyword} hanya gimmick belaka. #${keyword} #kecewa`,
-      `Saya curiga ${keyword} tidak seperti yang dikatakan. #${keyword} #curiga`,
-      `${keyword} gagal total. #${keyword} #gagal`,
-      `Stop ${keyword}, ini penipuan. #${keyword} #hoax`,
-      `${keyword} merusak kepercayaan publik. #${keyword} #rusak`,
-      `${keyword} sedang hangat diperbincangkan. #${keyword} #viral`,
-      `Ada yang bisa jelaskan tentang ${keyword}? #${keyword} #info`,
-      `${keyword} trending di mana-mana. #${keyword} #trending`,
-      `Apa pendapat kalian tentang ${keyword}? #${keyword} #opini`,
-      `${keyword} masuk berita utama hari ini. #${keyword} #berita`,
-    ];
-    return Array.from({ length: cfg.posts }, (_, i) => {
-      const idx = postIdCounter++;
-      return {
-        id: `post-${id}-${idx}`,
-        platform: platforms[idx % 3],
-        authorUsername: `user_${keyword}_${idx}`,
-        text: templates[i % templates.length],
-        postUrl: `https://${platforms[idx % 3].toLowerCase()}.com/post/${id}-${idx}`,
-        publishedAt: new Date(Date.now() - idx * 3600000).toISOString(),
-        likes: Math.floor(50 + Math.random() * 500),
-        comments: Math.floor(10 + Math.random() * 100),
-        shares: Math.floor(5 + Math.random() * 200),
-        reach: Math.floor(1000 + Math.random() * 10000),
-        engagementRate: parseFloat((Math.random() * 8 + 1).toFixed(2)),
-        campaignId: camp.id,
-      };
-    });
-  });
-
-  scrapedTimeline = Array.from({ length: 14 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - 13 + i);
-    return {
-      date: d.toISOString().slice(0, 10),
-      likes: Math.floor(200 + Math.random() * 800),
-      comments: Math.floor(50 + Math.random() * 300),
-      shares: Math.floor(20 + Math.random() * 150),
-      reach: Math.floor(5000 + Math.random() * 20000),
-    };
-  });
-  await computeBuzzerScores();
-  autoLabelPosts();
+  throw new Error("Synthetic data disabled");
 }
+
 
 // ---------- Social / Network / Report Routes ----------
 app.get("/api/social/accounts", (_req, res) => {
@@ -975,12 +1053,17 @@ function generateTrendPosts(keyword: string, platforms: string[], count: number,
   return Array.from({ length: count }, (_, i) => {
     const platform = platforms[i % platforms.length];
     const pool = platformTemplates[platform] || defaultTemplates;
+    const postUrls: Record<string, string> = {
+      X: `https://x.com/trend_user_${i}/status/${id}${i}`,
+      YouTube: `https://youtube.com/watch?v=${id}${i}`,
+      TikTok: `https://tiktok.com/@trend_user_${i}/video/${id}${i}`,
+    };
     return {
       id: `trend-post-${id}-${i}`,
       platform,
       authorUsername: `trend_user_${i}`,
       text: pool[i % pool.length],
-      postUrl: `#`,
+      postUrl: postUrls[platform] || '#',
       publishedAt: new Date(Date.now() - i * 3600000).toISOString(),
       likes: Math.floor(50 + Math.random() * 500),
       comments: Math.floor(10 + Math.random() * 100),
@@ -1095,6 +1178,26 @@ async function checkPythonModule(moduleName: string): Promise<boolean> {
   }
 }
 
+function computePlatformStats(posts: any[]) {
+  const platforms: Record<string, any> = {};
+  const platformKeys = ['X', 'YouTube', 'TikTok'];
+  platformKeys.forEach(pl => {
+    const plPosts = posts.filter((p: any) => p.platform === pl);
+    const hashtags = plPosts.flatMap((p: any) => (p.text || '').match(/#\w+/g) || []);
+    const topHashtags = [...new Set(hashtags)].slice(0, 5);
+    const totalEngagement = plPosts.reduce((sum: number, p: any) => sum + (p.likes || 0) + (p.comments || 0) + (p.shares || 0), 0);
+    const sentiment = plPosts.filter((p: any) => (p.text || '').toLowerCase().includes('boikot') || (p.text || '').toLowerCase().includes('gagal')).length > plPosts.length / 3 ? 'Negative' : plPosts.length > 0 ? 'Neutral' : 'N/A';
+    platforms[pl] = {
+      postCount: plPosts.length,
+      totalEngagement,
+      topHashtags,
+      avgSentiment: sentiment,
+      topPosts: plPosts.slice(0, 3).map((p: any) => ({ text: p.text?.slice(0, 100), url: p.postUrl }))
+    };
+  });
+  return platforms;
+}
+
 app.post("/api/social/scrape-trending", async (req, res) => {
   let twitter = { success: false, platform: 'X', error: 'disabled' };
   let youtube = { success: false, platform: 'YouTube', error: 'disabled' };
@@ -1114,6 +1217,7 @@ app.post("/api/social/scrape-trending", async (req, res) => {
   }
 
   if (!process.env.DISABLE_PYTHON_SCRAPERS) {
+    broadcastStatus('SCRAPE_START', { platforms: [] });
     const scraperPromises: Promise<any>[] = [];
     if (twitterConfigured) scraperPromises.push(runPythonTrendingScraper("twitter", 50));
     if (ytDlpAvailable) scraperPromises.push(runPythonTrendingScraper("youtube", 50));
@@ -1152,6 +1256,11 @@ app.post("/api/social/scrape-trending", async (req, res) => {
     generateTrendData(keyword);
   }
 
+  if (dbReady) {
+    const snapPlatforms = computePlatformStats(trendPosts);
+    await saveSnapshot(keyword, { totalPosts: trendPosts.length, platforms: snapPlatforms }).catch(() => {});
+  }
+  broadcastStatus('SCRAPE_DONE', { keyword, totalPosts: trendPosts.length });
   res.json({
     success: true,
     method: trendPosts.length > 0 ? (hasRealData ? "python" : "synthetic") : "synthetic",
@@ -1361,6 +1470,90 @@ app.post("/api/scraper-config", (req, res) => {
   res.json({ success: true, message: 'Konfigurasi scraper berhasil disimpan!' });
 });
 
+// ---------- Export Laporan ----------
+app.post("/api/export/csv", async (req, res) => {
+  const { tab, data, filters } = req.body;
+  try {
+    const { Parser } = await import('json2csv');
+    const parser = new Parser({ flatten: true });
+    const csv = parser.parse(data || []);
+    const filename = `${tab}-${new Date().toISOString().slice(0,10)}.csv`;
+    if (dbReady) {
+      const db = getDb();
+      db.data.exportLogs.push({ id: `exp-${Date.now()}`, type: 'csv', tab, createdAt: new Date().toISOString(), filters: filters || {} });
+      await db.write();
+    }
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/export/logs", (_req, res) => {
+  if (!dbReady) return res.json([]);
+  res.json(getDb().data.exportLogs);
+});
+
+// ---------- Scraper Schedule ----------
+let scheduledTask: cron.ScheduledTask | null = null;
+
+app.get("/api/schedule", (_req, res) => {
+  if (!dbReady) return res.json({ enabled: false, interval: 60, keywords: [], lastRun: null });
+  const s = getDb().data.scraperSchedule;
+  res.json(s);
+});
+
+app.post("/api/schedule", async (req, res) => {
+  if (!dbReady) return res.status(503).json({ error: 'DB not ready' });
+  const { enabled, interval, keywords } = req.body;
+  const db = getDb();
+  db.data.scraperSchedule = { enabled, interval: interval || 60, keywords: keywords || [], lastRun: db.data.scraperSchedule.lastRun };
+  await db.write();
+
+  if (scheduledTask) { scheduledTask.stop(); scheduledTask = null; }
+
+  if (enabled && keywords && keywords.length > 0) {
+    const cronInterval = `*/${interval || 60} * * * *`;
+    scheduledTask = cron.schedule(cronInterval, async () => {
+      console.log(`[Cron] Running scheduled scrape for: ${keywords.join(', ')}`);
+      // Trigger scrape for each keyword using the existing logic
+      for (const kw of keywords) {
+        try {
+          await fetch(`http://localhost:${process.env.PORT || 3001}/api/social/trigger-scrape`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword: kw })
+          });
+        } catch (e) { console.error(`[Cron] Scrape failed for ${kw}:`, e); }
+      }
+      db.data.scraperSchedule.lastRun = new Date().toISOString();
+      await db.write();
+    });
+    console.log(`[Cron] Scheduled every ${interval} min for: ${keywords.join(', ')}`);
+  }
+
+  res.json({ success: true });
+});
+
+// Trigger scrape endpoint (internal use by cron)
+app.post("/api/social/trigger-scrape", async (req, res) => {
+  const { keyword } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'keyword required' });
+  try {
+    const resp = await fetch(`http://localhost:${process.env.PORT || 3001}/api/social/sentiment-posts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyword })
+    });
+    const data = await resp.json();
+    res.json({ success: true, posts: data.posts?.length || 0, source: data.source });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/api/deep-alert", async (_req, res) => {
   // Logika deteksi kritis simulasi
   const critical = Math.random() < 0.05; 
@@ -1437,6 +1630,18 @@ app.post("/api/social/sentiment-posts", async (req, res) => {
   res.json({ posts, source: hasRealData ? 'scraped' : 'synthetic' });
 });
 
+app.get("/api/trend/history", async (_req, res) => {
+  if (!dbReady) return res.json([]);
+  try {
+    // Save current snapshot before returning
+    if (trendPosts.length > 0) {
+      const snapPlatforms = computePlatformStats(trendPosts);
+      await saveSnapshot('Trending Today', { totalPosts: trendPosts.length, platforms: snapPlatforms });
+    }
+    res.json(getTrendHistory());
+  } catch { res.json([]); }
+});
+
 app.get("/api/trend/daily", async (_req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const fourteenDaysAgo = new Date();
@@ -1452,32 +1657,15 @@ app.get("/api/trend/daily", async (_req, res) => {
     return postDate >= fourteenDaysAgo;
   });
 
-  const platforms: Record<string, any> = {};
-  const platformKeys = ['X', 'YouTube', 'TikTok'];
-
-  platformKeys.forEach(pl => {
-    const plPosts = relevantPosts.filter((p: any) => p.platform === pl);
-    const hashtags = plPosts.flatMap((p: any) => {
-      const tags = (p.text || '').match(/#\w+/g) || [];
-      return tags;
-    });
-    const topHashtags = [...new Set(hashtags)].slice(0, 5);
-    const totalEngagement = plPosts.reduce((sum: number, p: any) => sum + (p.likes || 0) + (p.comments || 0) + (p.shares || 0), 0);
-    const sentiment = plPosts.filter((p: any) => (p.text || '').toLowerCase().includes('boikot') || (p.text || '').toLowerCase().includes('gagal')).length > plPosts.length / 3 ? 'Negative' : plPosts.length > 0 ? 'Neutral' : 'N/A';
-
-    platforms[pl] = {
-      postCount: plPosts.length,
-      totalEngagement,
-      topHashtags,
-      avgSentiment: sentiment,
-      topPosts: plPosts.slice(0, 3).map((p: any) => ({ text: p.text?.slice(0, 100), url: p.postUrl }))
-    };
-  });
+  const platforms = computePlatformStats(relevantPosts);
 
   const sortedPlatforms = Object.entries(platforms).sort((a, b) => b[1].postCount - a[1].postCount);
   const dominantPlatform = sortedPlatforms.length > 0 ? sortedPlatforms[0][0] : 'N/A';
   const totalPosts = relevantPosts.length;
 
+  if (dbReady && trendPosts.length > 0) {
+    await saveSnapshot('Trending Today', { totalPosts, platforms }).catch(() => {});
+  }
   res.json({
     date: today,
     generatedAt: Date.now(),

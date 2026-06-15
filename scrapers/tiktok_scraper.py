@@ -42,14 +42,13 @@ async def search(keyword: str, limit: int = 20):
                         "shares": stats.get("shareCount", 0) or 0,
                         "views": stats.get("playCount", 0) or 0,
                     })
-                if results:
-                    print(json.dumps({"success": True, "platform": "TikTok", "results": results}), flush=True)
-                    return
-            except Exception:
-                pass
+            except Exception as e:
+                print(json.dumps({"success": False, "platform": "TikTok", "error": f"Hashtag search failed: {str(e)}"}), flush=True)
+                return
 
-            # Fallback: trending videos
-            await get_trending_videos(api, limit, results)
+            if not results:
+                print(json.dumps({"success": False, "platform": "TikTok", "error": f"No real results found for hashtag: {keyword}"}), flush=True)
+                return
     except Exception as e:
         print(json.dumps({"success": False, "platform": "TikTok", "error": str(e)}), flush=True)
         return

@@ -1,5 +1,5 @@
 import React from 'react';
-import { TrendingUp, AlertTriangle, BrainCircuit, Users, MessageSquare, Share2, ExternalLink } from 'lucide-react';
+import { TrendingUp, AlertTriangle, BrainCircuit, MessageSquare, ExternalLink } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 
 interface TrendDashboardProps {
@@ -90,22 +90,22 @@ export default function TrendDashboard({ trendData, insight, insightMode, isTren
                 <div className="flex justify-between"><span>Postingan</span><span className="text-slate-200 font-bold">{p.postCount}</span></div>
                 <div className="flex justify-between"><span>Engagement</span><span className="text-slate-200 font-bold">{p.totalEngagement?.toLocaleString()}</span></div>
               </div>
-                {p.topHashtags?.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-slate-800">
-                    <span className="text-[9px] text-slate-500 uppercase">Top Hashtag</span>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {p.topHashtags.map((tag: string) => (
-                        <span 
-                          key={tag} 
-                          className="text-[10px] bg-slate-900 text-slate-300 px-1.5 py-0.5 rounded border border-slate-800 cursor-pointer hover:border-amber-500/50 hover:text-amber-400 transition"
-                          onClick={() => onHashtagClick?.(tag)}
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
+              {p.topHashtags?.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-slate-800">
+                  <span className="text-[9px] text-slate-500 uppercase">Top Hashtag</span>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {p.topHashtags.map((tag: string) => (
+                      <span
+                        key={tag}
+                        className="text-[10px] bg-slate-900 text-slate-300 px-1.5 py-0.5 rounded border border-slate-800 cursor-pointer hover:border-amber-500/50 hover:text-amber-400 transition"
+                        onClick={() => onHashtagClick?.(tag)}
+                      >
+                        {tag}
+                      </span>
+                    ))}
                   </div>
-                )}
+                </div>
+              )}
               {p.topPosts?.length > 0 && (
                 <div className="mt-2 text-[9px] text-slate-500 truncate" title={p.topPosts[0]?.text}>
                   Top: {p.topPosts[0]?.text}
@@ -131,41 +131,6 @@ export default function TrendDashboard({ trendData, insight, insightMode, isTren
                 <Bar dataKey="engagement" name="Engagement" fill="#6366F1" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* Top Posts */}
-      {platformList.some((p: any) => p.topPosts?.length > 0) && (
-        <div className="bg-[#15151A] border border-[#2A2A2E] rounded-xl p-5">
-          <h5 className="text-[10px] uppercase tracking-wider font-bold text-slate-500 font-mono mb-4 flex items-center gap-2">
-            <MessageSquare className="w-3.5 h-3.5" /> Postingan Teratas
-          </h5>
-          <div className="space-y-3">
-            {platformList.map((p: any) =>
-              p.topPosts?.length > 0 && (
-                <div key={p.name}>
-                  <h6 className={`text-[11px] font-bold mb-2 ${
-                    p.name === 'X' ? 'text-zinc-300' :
-                    p.name === 'YouTube' ? 'text-red-400' :
-                    'text-cyan-400'
-                  }`}>{p.name}</h6>
-                  <div className="space-y-2">
-                    {p.topPosts.map((post: any, idx: number) => (
-                      <div key={idx} className="bg-[#0F0F12] border border-[#2A2A2E] rounded-lg p-3 flex items-start gap-3">
-                        <span className="text-[10px] font-mono text-slate-600 mt-0.5 min-w-4">#{idx + 1}</span>
-                        <p className="text-xs text-slate-300 leading-relaxed flex-1">{post.text}</p>
-                        {post.url && post.url !== '#' && (
-                          <a href={post.url} target="_blank" rel="noopener noreferrer" className="text-slate-600 hover:text-slate-400 transition shrink-0 mt-0.5">
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            )}
           </div>
         </div>
       )}

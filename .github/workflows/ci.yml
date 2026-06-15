@@ -1,14 +1,20 @@
-name: CI/CD
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [development]
+    branches: [development, main]
   pull_request:
-    branches: [development]
+    branches: [development, main]
+
+# Cancel duplicate runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: "22"
 
 jobs:
   # ─── Lint & Type-check ──────────────────────────────────
@@ -19,11 +25,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - run: npm ci
       - run: npm run lint
+      - run: npm audit --production --audit-level=high || echo "::warning::Audit found vulnerabilities"
 
   # ─── Build ───────────────────────────────────────────────
   build:
@@ -34,7 +41,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - run: npm ci
@@ -44,13 +51,12 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: dist-${{ github.sha }}
           path: dist/
           retention-days: 3
 
-  # ─── Docker build & push (development only) ──────────────
+  # ─── Docker build & push ───────────────────────────────
   docker:
-    if: github.ref == 'refs/heads/development'
     runs-on: ubuntu-latest
     needs: [build]
     permissions:
@@ -79,25 +85,50 @@ jobs:
             type=ref,event=branch
             type=sha,prefix=,suffix=,format=short
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/development' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' }}
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/development' }}
+            type=raw,value=stable,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build & push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            NODE_VERSION=${{ env.NODE_VERSION }}
 
-  # ─── Deploy (placeholder — extend as needed) ────────────
+  # ─── Deploy to Server ──────────────────────────────────
   deploy:
-    if: github.ref == 'refs/heads/development'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: [docker]
+    environment: production
     steps:
-      - name: Deploy trigger
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          script: |
+            set -e
+            cd ${{ secrets.DEPLOY_PATH || '/opt/buzztrack' }}
+
+            # Pull latest image
+            docker compose pull buzztrack
+
+            # Graceful restart
+            docker compose up -d --no-deps buzztrack
+
+            # Clean up old images
+            docker image prune -f
+
+      - name: Deployment notification
         run: |
-          echo "::notice::Docker image pushed: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          echo "Add your deploy step here — SSH, k8s, cloud run, etc."
+          echo "::notice::BuzzTrack deployed successfully!"
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"

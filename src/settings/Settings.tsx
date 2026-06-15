@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Key, Save, Database, Eye, EyeOff } from 'lucide-react';
+import { Key, Save, Database, Eye, EyeOff, Clock } from 'lucide-react';
 
 interface SettingsProps {
   showNotification: (type: 'success' | 'error', text: string) => void;
@@ -34,6 +34,12 @@ export default function Settings({ showNotification }: SettingsProps) {
     TIKTOK_MS_TOKEN: false,
   });
 
+  const [schedule, setSchedule] = useState<{ enabled: boolean; intervalMinutes: number; keywords: string }>({
+    enabled: false,
+    intervalMinutes: 15,
+    keywords: '',
+  });
+
   useEffect(() => {
     fetch('/api/scraper-config').then(r => r.json()).then(data => {
       setScraperConfig(prev => ({
@@ -41,6 +47,9 @@ export default function Settings({ showNotification }: SettingsProps) {
         YOUTUBE_API_KEY: data.YOUTUBE_API_KEY || prev.YOUTUBE_API_KEY,
         TIKTOK_MS_TOKEN: data.TIKTOK_MS_TOKEN || prev.TIKTOK_MS_TOKEN,
       }));
+    }).catch(() => {});
+    fetch('/api/schedule').then(r => r.json()).then(data => {
+      if (data) setSchedule({ enabled: data.enabled ?? false, intervalMinutes: data.intervalMinutes ?? 15, keywords: data.keywords ?? '' });
     }).catch(() => {});
   }, []);
 
@@ -106,19 +115,38 @@ export default function Settings({ showNotification }: SettingsProps) {
 
   const handleSaveScraper = async () => {
     try {
-      const resp = await fetch('/api/scraper-config', {
+      // Kirim ke backend untuk ditulis ke .env
+      const resp = await fetch('/api/config/env', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(scraperConfig),
       });
       const data = await resp.json();
       if (data.success) {
-        showNotification('success', 'Konfigurasi scraper berhasil disimpan!');
+        showNotification('success', 'Konfigurasi scraper disimpan ke .env!');
       } else {
         showNotification('error', data.message || 'Gagal menyimpan');
       }
     } catch {
-      showNotification('error', 'Gagal menyimpan konfigurasi scraper');
+      showNotification('error', 'Gagal menyimpan ke server');
+    }
+  };
+
+  const handleSaveSchedule = async () => {
+    try {
+      const resp = await fetch('/api/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: schedule.enabled, intervalMinutes: schedule.intervalMinutes, keywords: schedule.keywords }),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        showNotification('success', `Jadwal scraping ${schedule.enabled ? 'diaktifkan' : 'dinonaktifkan'}!`);
+      } else {
+        showNotification('error', data.message || 'Gagal menyimpan jadwal');
+      }
+    } catch {
+      showNotification('error', 'Gagal menyimpan jadwal scraping');
     }
   };
 
@@ -263,6 +291,62 @@ export default function Settings({ showNotification }: SettingsProps) {
           className="w-full mt-4 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 font-medium py-2.5 px-4 rounded-lg text-xs transition flex items-center justify-center gap-2"
         >
           <Save className="w-4 h-4" /> Simpan Konfigurasi Scraper
+        </button>
+      </div>
+
+      <div className="mt-10 border-t border-slate-800 pt-8">
+        <h2 className="text-lg font-semibold text-slate-100 flex items-center gap-2 mb-4">
+          <Clock className="w-5 h-5 text-cyan-400" /> Jadwal Scraping Otomatis
+        </h2>
+
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={schedule.enabled}
+                onChange={e => setSchedule({...schedule, enabled: e.target.checked})}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-slate-700 rounded-full peer peer-checked:bg-cyan-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"></div>
+            </label>
+            <span className="text-xs text-slate-300">{schedule.enabled ? 'Aktif' : 'Nonaktif'}</span>
+          </div>
+
+          {schedule.enabled && (
+            <>
+              <div>
+                <label className="block text-[11px] font-mono uppercase text-slate-400 font-bold mb-1">Interval (menit)</label>
+                <select
+                  value={schedule.intervalMinutes}
+                  onChange={e => setSchedule({...schedule, intervalMinutes: Number(e.target.value)})}
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-300 focus:outline-none focus:border-cyan-500/50"
+                >
+                  {[5, 10, 15, 30, 60, 120, 360].map(m => (
+                    <option key={m} value={m}>Setiap {m >= 60 ? `${m / 60} jam` : `${m} menit`}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono uppercase text-slate-400 font-bold mb-1">Kata Kunci (pisahkan dengan koma)</label>
+                <input
+                  type="text"
+                  value={schedule.keywords}
+                  onChange={e => setSchedule({...schedule, keywords: e.target.value})}
+                  placeholder="pemilu, politik, hoax, pilkada"
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50"
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        <button
+          onClick={handleSaveSchedule}
+          className="w-full mt-4 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 border border-cyan-500/30 font-medium py-2.5 px-4 rounded-lg text-xs transition flex items-center justify-center gap-2"
+        >
+          <Save className="w-4 h-4" /> Simpan Jadwal Scraping
         </button>
       </div>
     </div>

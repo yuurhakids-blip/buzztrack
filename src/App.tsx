@@ -1,8 +1,8 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, lazy, Suspense, useCallback } from 'react';
 import { Campaign, SuspiciousAccount, Platform, AnalysisResponse, NetworkNode, NetworkLink, SocialAccount, SocialPost, DailyEngagement, AudienceDemographics } from './core/domain/entities';
 import { api } from './api';
 import { AIService } from './infrastructure/services/AIService';
-import { Settings as SettingsIcon, ShieldAlert, Search, Radio, Hash, UserX, BrainCircuit, AlertTriangle, PlusCircle, ExternalLink, Send, Users, LineChart, CornerDownRight, TrendingUp, CalendarDays, X as CloseIcon, CheckCircle, Clock, Fingerprint, Cpu, RefreshCw, Activity } from 'lucide-react';
+import { Settings as SettingsIcon, ShieldAlert, Search, Radio, Hash, UserX, BrainCircuit, AlertTriangle, PlusCircle, ExternalLink, Send, Users, LineChart, CornerDownRight, TrendingUp, CalendarDays, X as CloseIcon, CheckCircle, Clock, Fingerprint, Cpu, RefreshCw, Activity, Sun, Moon, Bell, BellDot } from 'lucide-react';
 const NetworkGraph = lazy(() => import('./components/NetworkGraph'));
 const SocialAnalyticsDashboard = lazy(() => import('./components/SocialAnalyticsDashboard'));
 const Settings = lazy(() => import('./settings/Settings'));
@@ -12,18 +12,41 @@ import events from 'events';
 events.defaultMaxListeners = 100;
 
 const TrendDashboard = lazy(() => import('./components/TrendDashboard'));
+const AlertLog = lazy(() => import('./components/AlertLog'));
+import DeepCognitionAlert from './components/DeepCognitionAlert';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'campaigns' | 'accounts' | 'graph' | 'analyzer' | 'reporter' | 'analytics' | 'settings' | 'tren' | 'sentiment'>('campaigns');
+  const [activeTab, setActiveTab] = useState<'campaigns' | 'accounts' | 'graph' | 'analyzer' | 'reporter' | 'analytics' | 'settings' | 'tren' | 'sentiment' | 'peringatan'>('campaigns');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [trendData, setTrendData] = useState<any>(null);
   const [trendInsight, setTrendInsight] = useState<{ insight: string, mode: 'AI' | 'Heuristic' | null }>({ insight: '', mode: null });
   const [isTrendLoading, setIsTrendLoading] = useState(false);
+  const [alertBadge, setAlertBadge] = useState<{ count: number; severity: string }>({ count: 0, severity: 'low' });
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setAlertBadge(detail);
+    };
+    window.addEventListener('alert-count-changed', handler);
+    return () => window.removeEventListener('alert-count-changed', handler);
+  }, []);
 
   useEffect(() => {
     if (activeTab === 'tren' && !trendData) {
       fetchTrendData();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('echowatch-theme') as 'dark' | 'light' | null;
+    if (saved) setTheme(saved);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('light', theme === 'light');
+    localStorage.setItem('echowatch-theme', theme);
+  }, [theme]);
 
   const fetchTrendData = async (autoScrape: boolean = true) => {
     setIsTrendLoading(true);
@@ -192,7 +215,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
   // General Notification Alert
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   const [activeProvider, setActiveProvider] = useState<string>('Gemini');
   const [aiActive, setAiActive] = useState<boolean>(false);
@@ -464,7 +487,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
     }
   };
 
-  const showNotification = (type: 'success' | 'error', text: string) => {
+  const showNotification = (type: 'success' | 'error' | 'warning', text: string) => {
     setNotification({ type, text });
     setTimeout(() => {
       setNotification(null);
@@ -659,11 +682,13 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
           className={`fixed top-5 right-5 z-50 flex items-center gap-3 px-5 py-3.5 rounded-xl border shadow-xl backdrop-blur-md transition-all duration-300 animate-slide-in ${
             notification.type === 'success' 
               ? 'bg-[#152A18]/90 text-emerald-400 border-emerald-500/30' 
-              : 'bg-[#2A1515]/90 text-red-400 border-red-500/30'
+              : notification.type === 'warning'
+                ? 'bg-[#2A2515]/90 text-amber-400 border-amber-500/30'
+                : 'bg-[#2A1515]/90 text-red-400 border-red-500/30'
           }`}
           id="system-notification"
         >
-          {notification.type === 'success' ? <CheckCircle className="w-5 h-5 text-emerald-400" /> : <AlertTriangle className="w-5 h-5 text-red-400" />}
+          {notification.type === 'success' ? <CheckCircle className="w-5 h-5 text-emerald-400" /> : notification.type === 'warning' ? <AlertTriangle className="w-5 h-5 text-amber-400" /> : <AlertTriangle className="w-5 h-5 text-red-400" />}
           <span className="text-xs font-semibold font-mono tracking-tight">{notification.text}</span>
           <button onClick={() => setNotification(null)} className="hover:opacity-75 transition">
             <CloseIcon className="w-4 h-4 text-slate-400 ml-1" />
@@ -698,6 +723,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
             { id: 'analytics', label: 'Analitik Sosial', icon: LineChart },
             { id: 'tren', label: 'Tren Harian', icon: TrendingUp },
             { id: 'sentiment', label: 'Analisis Sentimen', icon: Activity },
+            { id: 'peringatan', label: 'Peringatan', icon: BellDot },
             { id: 'analyzer', label: 'Analis Ancaman', icon: BrainCircuit },
             { id: 'reporter', label: 'Lapor Insiden', icon: Send },
             { id: 'settings', label: 'Pengaturan', icon: SettingsIcon }
@@ -707,11 +733,18 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               <button 
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1 px-2 py-2 rounded-xl transition-all duration-200 ${activeTab === tab.id ? 'text-[#D4AF37] bg-[#D4AF37]/10 border border-[#D4AF37]/30 shadow-md' : 'text-[#A0A0A5] hover:text-[#F5F5F5] hover:bg-slate-800/30'}`}
+                className={`flex items-center gap-1 px-2 py-2 rounded-xl transition-all duration-200 relative ${activeTab === tab.id ? 'text-[#D4AF37] bg-[#D4AF37]/10 border border-[#D4AF37]/30 shadow-md' : 'text-[#A0A0A5] hover:text-[#F5F5F5] hover:bg-slate-800/30'}`}
                 id={`nav-${tab.id}`}
               >
                 <Icon className="w-4 h-4" />
                 <span>{tab.label}</span>
+                {tab.id === 'peringatan' && alertBadge.count > 0 && (
+                  <span className={`absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] font-bold flex items-center justify-center ${
+                    alertBadge.severity === 'high' ? 'bg-red-500 text-white' : 'bg-amber-500 text-black'
+                  }`}>
+                    {alertBadge.count > 9 ? '9+' : alertBadge.count}
+                  </span>
+                )}
               </button>
             )
           })}
@@ -723,6 +756,13 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
             <p className="text-[9px] font-mono text-[#66666E] uppercase tracking-wider">Mode Akses</p>
             <p className="text-xs font-bold text-[#D4AF37] opacity-90 font-mono">Admin Keamanan</p>
           </div>
+          <button
+            onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+            className="w-9 h-9 rounded-full border border-slate-700 bg-[#15151A] flex items-center justify-center text-sm hover:border-amber-500/50 transition"
+            title={`Beralih ke mode ${theme === 'dark' ? 'terang' : 'gelap'}`}
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-amber-400" />}
+          </button>
           <button 
             onClick={() => setActiveTab('settings')}
             className="w-9 h-9 rounded-full border border-slate-700 bg-[#15151A] flex items-center justify-center text-sm font-mono font-bold text-amber-400 hover:border-[#D4AF37]/50 transition"
@@ -897,15 +937,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
           </div>
 
           <div className="mt-auto hidden xl:block pt-4">
-            <div className="p-4 rounded border border-[#D4AF37]/20 bg-[#D4AF37]/5 text-[11px] text-[#D4AF37] leading-relaxed relative overflow-hidden">
-              <div className="absolute right-1 bottom-1 opacity-10">
-                <Cpu className="w-16 h-16 text-amber-400" />
-              </div>
-              <strong className="block mb-1 font-bold text-xs flex items-center gap-1.5">
-                <ShieldAlert className="w-3.5 h-3.5" /> DEEP COGNITION ALERT
-              </strong>
-              Lonjakan copypasta terkoordinasi di 3 kampanye regional terdeteksi hari ini. Sinkronkan peta ancaman menggunakan tab analisis mesin ancaman siber.
-            </div>
+            <DeepCognitionAlert onNavigate={() => setActiveTab('peringatan')} showNotification={showNotification} />
           </div>
         </aside>
 
@@ -918,6 +950,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
             { id: 'analytics', label: 'Analitik', icon: LineChart },
             { id: 'tren', label: 'Tren', icon: TrendingUp },
             { id: 'sentiment', label: 'Sentimen', icon: Activity },
+            { id: 'peringatan', label: 'Alert', icon: BellDot },
             { id: 'analyzer', label: 'Analis', icon: BrainCircuit },
             { id: 'reporter', label: 'Lapor', icon: Send },
             { id: 'settings', label: 'Setelan', icon: SettingsIcon },
@@ -927,7 +960,7 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`flex flex-col items-center gap-1 px-3 py-2 mx-1 text-[10px] font-semibold rounded-lg transition duration-200 ${
+                className={`flex flex-col items-center gap-1 px-3 py-2 mx-1 text-[10px] font-semibold rounded-lg transition duration-200 relative ${
                   activeTab === tab.id
                     ? 'bg-[#1A1A1F] text-[#D4AF37] border border-[#D4AF37]/30'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/30'
@@ -935,6 +968,13 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               >
                 <Icon className="w-4 h-4" />
                 {tab.label}
+                {tab.id === 'peringatan' && alertBadge.count > 0 && (
+                  <span className={`absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full text-[7px] font-bold flex items-center justify-center ${
+                    alertBadge.severity === 'high' ? 'bg-red-500 text-white' : 'bg-amber-500 text-black'
+                  }`}>
+                    {alertBadge.count > 9 ? '9+' : alertBadge.count}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -1605,6 +1645,13 @@ Narasi: ${selectedCampaign.keyNarrative || 'Tidak diketahui'}`;
               />
             </Suspense>
           </div>
+
+          {/* TAB: Peringatan */}
+          {activeTab === 'peringatan' && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500 font-mono text-sm border border-slate-800 rounded-xl p-8">Memuat Log Peringatan...</div>}>
+              <AlertLog />
+            </Suspense>
+          )}
 
           {/* TAB 5: Gemini-powered Analyzer Playground */}
           {activeTab === 'analyzer' && (
