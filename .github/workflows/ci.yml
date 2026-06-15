@@ -109,7 +109,18 @@ jobs:
     needs: [docker]
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
     steps:
+      - name: Check deploy config
+        id: deploy_config
+        run: |
+          if [ -n "${{ secrets.DEPLOY_HOST }}" ] && [ -n "${{ secrets.DEPLOY_USER }}" ] && [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "::warning::Deploy skipped — set DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY secrets"
+          fi
+
       - name: Deploy via SSH
+        if: steps.deploy_config.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -130,6 +141,7 @@ jobs:
             docker image prune -f
 
       - name: Deployment notification
+        if: steps.deploy_config.outputs.configured == 'true'
         run: |
           echo "::notice::BuzzTrack deployed successfully!"
           echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
