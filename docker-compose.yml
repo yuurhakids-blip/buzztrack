@@ -25,7 +25,7 @@ services:
       # Persist data across container restarts
       - buzztrack_data:/app/data
       # Mount .env for local config (optional)
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
     restart: unless-stopped
     labels:
       - "org.opencontainers.image.title=BuzzTrack"
